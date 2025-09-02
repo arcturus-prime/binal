@@ -17,7 +17,7 @@ from binaryninja import (
 #       CONFIG
 # --------------------
 PORT_NUMBER = 12007
-INIT_SYNC_BATCH = 500
+INIT_SYNC_BATCH = 1000
 # --------------------
 
 
@@ -112,7 +112,7 @@ def lift_type(type_: Type):
 
         elif type_.type_class == TypeClass.ArrayTypeClass:
             to_parse.append(type_.element_type)
-            binal_type["info"] = { "kind": "array", "item_type": type_.element_type.get_string(), "size": type_.count }
+            binal_type["info"] = { "kind": "array", "item_type": type_.element_type.get_string() }
         elif type_.type_class == TypeClass.NamedTypeReferenceClass and type_.target(bv):
             to_parse.append(type_.target(bv))
 
@@ -129,7 +129,7 @@ def lift_type(type_: Type):
 def lift_global(global_):
     binal_objects = lift_type(global_.type)
 
-    binal_global = { "kind": "global", "location": global_.address, "global_type": global_.type.get_string() }
+    binal_global = { "kind": "data", "location": global_.address, "data_type": global_.type.get_string() }
     binal_objects[global_.name] = binal_global
 
     return binal_objects
