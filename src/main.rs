@@ -1,11 +1,9 @@
 mod ir;
 
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
+use ir::Database;
 
 #[derive(Subcommand, Debug, Clone)]
 enum Command {
@@ -34,23 +32,20 @@ fn main() {
 
     match args.command {
         Command::List { project } => {
-            let objects = project::load(&project).unwrap();
+            let db = Database::open(&project).unwrap();
 
-            for (name, object) in objects {
-                println!("{} {:?}", name, object)
+            for object in db.types.iter() {
+                println!("{} {:?}", object.name, object)
             }
         }
         Command::Merge {
             source,
             destination,
-        } => {
-            let source = project::load(&source).unwrap();
-            let mut destination_objects = project::load(&destination).unwrap();
+        } => {}
+        Command::Create { destination } => {
+            let db = Database::default();
 
-            destination_objects.extend(source.into_iter());
-
-            project::save(&destination, &destination_objects).unwrap();
+            db.save(&destination).unwrap()
         }
-        Command::Create { destination } => bin,
     }
 }
