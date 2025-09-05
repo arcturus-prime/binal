@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt::Display,
     fs::{File, OpenOptions},
     io::{Read, Write},
@@ -15,7 +16,7 @@ use serde::{
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct StructMember {
     name: String,
-    r#type: TypeRef,
+    field_type: usize,
     offset: usize,
 }
 
@@ -28,114 +29,131 @@ struct EnumValue {
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct UnionMember {
     name: String,
-    r#type: TypeRef,
+    field_type: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-enum TypeRef {
-    Int(u16),
-    Uint(u16),
-    Float(u16),
-    Value(usize),
-    Pointer(u8, usize),
-}
-
-impl Default for TypeRef {
-    fn default() -> Self {
-        TypeRef::Uint(0)
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+#[serde(rename_all(deserialize = "lowercase", serialize = "lowercase"))]
 enum TypeInfo {
-    Struct(Vec<StructMember>),
-    Enum(Vec<EnumValue>),
-    Union(Vec<UnionMember>),
-    TypeDef(TypeRef),
-    Function(Vec<TypeRef>, TypeRef),
-    Array(TypeRef, usize),
+    Struct {
+        fields: Vec<StructMember>,
+    },
+    Enum {
+        values: Vec<EnumValue>,
+    },
+    Union {
+        fields: Vec<UnionMember>,
+    },
+    TypeDef {
+        alias_type: usize,
+    },
+    Function {
+        arg_types: Vec<usize>,
+        return_type: usize,
+    },
+    Int {},
+    Uint {},
+    Float {},
+    Bool {},
+    Pointer {
+        depth: u8,
+        value_type: usize,
+    },
+    Array {
+        item_type: usize,
+    },
 }
 
 impl Default for TypeInfo {
     fn default() -> Self {
-        TypeInfo::Array(TypeRef::default(), 1)
+        TypeInfo::Struct { fields: Vec::new() }
     }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Type {
     pub name: String,
-
     size: usize,
     alignment: usize,
     info: TypeInfo,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
+struct FunctionArgument {
+    name: String,
+    arg_type: usize,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Function {
     pub name: String,
-
     location: usize,
 
-    return_type: TypeRef,
-    argument_names: Vec<String>,
-    argument_types: Vec<TypeRef>,
+    return_type: usize,
+    arguments: Vec<FunctionArgument>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Data {
     pub name: String,
     location: usize,
-    r#type: TypeRef,
+    data_type: usize,
 }
 
 #[derive(Default)]
 pub struct IdVec<T: Default> {
     array: Vec<T>,
 
-    reverse_lookup: Vec<usize>,
     lookup: Vec<usize>,
+    reverse_lookup: Vec<usize>,
 
-    holes: Vec<usize>,
+    hash_lookup: HashMap<usize, usize>,
 }
 
 impl<'a, T: Default + Deserialize<'a>> IdVec<T> {
-    pub fn push(&mut self, item: T) -> usize {
-        let id;
-
+    pub fn insert(&mut self, id: usize, item: T) {
         self.array.push(item);
 
-        if let Some(hole) = self.holes.pop() {
-            id = hole;
-            self.lookup[id] = self.reverse_lookup.len();
-            self.reverse_lookup.push(id);
+        if id > self.array.len() {
+            self.hash_lookup.insert(id, self.reverse_lookup.len());
         } else {
-            id = self.lookup.len();
-            self.lookup.push(self.reverse_lookup.len());
-            self.reverse_lookup.push(id);
+            self.lookup.resize(id + 1, 0);
+            self.lookup[id] = self.reverse_lookup.len();
         }
 
-        id
+        self.reverse_lookup.push(id);
     }
 
-    pub fn get(&self, id: usize) -> &T {
-        let index = self.lookup[id];
-        return &self.array[index];
+    pub fn get(&self, id: usize) -> Option<&T> {
+        let index;
+
+        if id > self.array.len() {
+            index = self.hash_lookup.get(&id)
+        } else {
+            index = self.lookup.get(id);
+        }
+
+        let Some(index) = index else { return None };
+
+        return Some(&self.array[*index]);
     }
 
-    pub fn get_mut(&mut self, id: usize) -> &mut T {
-        let index = self.lookup[id];
-        return &mut self.array[index];
+    pub fn get_mut(&mut self, id: usize) -> Option<&mut T> {
+        let index;
+
+        if id > self.array.len() {
+            index = self.hash_lookup.get(&id)
+        } else {
+            index = self.lookup.get(id);
+        }
+
+        let Some(index) = index else { return None };
+
+        return Some(&mut self.array[*index]);
     }
 
-    pub fn delete(&mut self, id: usize) {
-        let index = self.lookup[id];
-
-        self.lookup[*self.reverse_lookup.last().unwrap()] = index;
-        self.array.swap_remove(index);
-        self.reverse_lookup.swap_remove(index);
-        self.holes.push(id);
-    }
+    pub fn rehash(&mut self) {}
 
     pub fn iter(&self) -> impl Iterator<Item = &T> + '_ {
         self.array.iter()
@@ -186,23 +204,8 @@ impl<'de, T: Deserialize<'de> + Default> Visitor<'de> for IdVecVisitor<T> {
         A: MapAccess<'de>,
     {
         let mut id_vec = IdVec::<T>::default();
-
-        let mut holes = Vec::new();
         while let Some((id, value)) = map.next_entry::<usize, T>()? {
-            id_vec.array.push(value);
-            id_vec.reverse_lookup.push(id);
-
-            id_vec.lookup.resize(id, 0);
-            holes.resize(id, true);
-
-            holes[id] = false;
-            id_vec.lookup[id] = id_vec.array.len();
-        }
-
-        for (i, index) in holes.iter().zip(0..) {
-            if *i {
-                id_vec.holes.push(index);
-            }
+            id_vec.insert(id, value)
         }
 
         Ok(id_vec)
