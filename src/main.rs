@@ -29,6 +29,10 @@ enum Command {
     Create {
         destination: PathBuf,
     },
+    Generate {
+        destination: PathBuf,
+        source: PathBuf,
+    },
 }
 
 #[derive(Parser, Debug)]
@@ -85,5 +89,9 @@ fn main() {
 
             db.save(&destination).unwrap()
         }
+        Command::Generate {
+            destination,
+            source,
+        } => {}
     }
 }
