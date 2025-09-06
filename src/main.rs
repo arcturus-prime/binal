@@ -1,14 +1,26 @@
 mod ir;
+mod search;
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use ir::Database;
 
 #[derive(Subcommand, Debug, Clone)]
+enum DatabaseCategory {
+    Functions,
+    Types,
+    Data,
+}
+
+#[derive(Subcommand, Debug, Clone)]
 enum Command {
-    List {
+    Search {
+        #[command(subcommand)]
+        category: DatabaseCategory,
+
         project: PathBuf,
+        expression: String,
     },
     Merge {
         destination: PathBuf,
@@ -26,22 +38,48 @@ struct Arguments {
     command: Command,
 }
 
+fn search_objects<'a, T: Default + Clone + ir::NamedObject + 'a>(
+    iter: impl Iterator<Item = &'a T>,
+    search: &str,
+) {
+    let mut tree = search::SearchTree::default();
+
+    for item in iter {
+        tree.insert(item.name(), item.clone());
+    }
+
+    println!("Done compiling");
+
+    for item in tree.search(search) {
+        println!("{}", item.name());
+    }
+}
+
 fn main() {
     env_logger::init();
     let args = Arguments::parse();
 
     match args.command {
-        Command::List { project } => {
+        Command::Search {
+            project,
+            expression,
+            category,
+        } => {
             let db = Database::open(&project).unwrap();
 
-            for object in db.types.iter() {
-                println!("{} {:?}", object.name, object)
+            match category {
+                DatabaseCategory::Functions => search_objects(db.functions.iter(), &expression),
+                DatabaseCategory::Types => search_objects(db.types.iter(), &expression),
+                DatabaseCategory::Data => search_objects(db.data.iter(), &expression),
             }
         }
         Command::Merge {
             source,
             destination,
-        } => {}
+        } => {
+            let source_db = Database::open(&source).unwrap();
+            let destination_db = Database::open(&destination).unwrap();
+        }
         Command::Create { destination } => {
             let db = Database::default();
 

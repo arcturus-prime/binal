@@ -13,26 +13,26 @@ use serde::{
     Deserialize, Deserializer, Serialize,
 };
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 struct StructMember {
     name: String,
     field_type: usize,
     offset: usize,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 struct EnumValue {
     name: String,
     value: usize,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 struct UnionMember {
     name: String,
     field_type: usize,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "kind")]
 #[serde(rename_all(deserialize = "lowercase", serialize = "lowercase"))]
 enum TypeInfo {
@@ -71,34 +71,56 @@ impl Default for TypeInfo {
     }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct Type {
-    pub name: String,
+    name: String,
     size: usize,
     alignment: usize,
     info: TypeInfo,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 struct FunctionArgument {
     name: String,
     arg_type: usize,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct Function {
-    pub name: String,
+    name: String,
     location: usize,
 
     return_type: usize,
     arguments: Vec<FunctionArgument>,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct Data {
-    pub name: String,
+    name: String,
     location: usize,
     data_type: usize,
+}
+
+pub trait NamedObject {
+    fn name(&self) -> &str;
+}
+
+impl NamedObject for Data {
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl NamedObject for Function {
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+impl NamedObject for Type {
+    fn name(&self) -> &str {
+        &self.name
+    }
 }
 
 #[derive(Default)]
@@ -115,7 +137,7 @@ impl<'a, T: Default + Deserialize<'a>> IdVec<T> {
     pub fn insert(&mut self, id: usize, item: T) {
         self.array.push(item);
 
-        if id > self.array.len() {
+        if id > self.lookup.len() {
             self.hash_lookup.insert(id, self.reverse_lookup.len());
         } else {
             self.lookup.resize(id + 1, 0);
@@ -128,7 +150,7 @@ impl<'a, T: Default + Deserialize<'a>> IdVec<T> {
     pub fn get(&self, id: usize) -> Option<&T> {
         let index;
 
-        if id > self.array.len() {
+        if id > self.lookup.len() {
             index = self.hash_lookup.get(&id)
         } else {
             index = self.lookup.get(id);
@@ -161,6 +183,10 @@ impl<'a, T: Default + Deserialize<'a>> IdVec<T> {
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> + '_ {
         self.array.iter_mut()
+    }
+
+    pub fn id_iter(&self) -> impl Iterator<Item = &usize> + '_ {
+        self.reverse_lookup.iter()
     }
 
     pub fn len(&self) -> usize {
