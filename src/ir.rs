@@ -101,48 +101,19 @@ pub struct Data {
     data_type: usize,
 }
 
-pub trait NamedObject {
-    fn name(&self) -> &str;
-}
-
-impl NamedObject for Data {
-    fn name(&self) -> &str {
-        &self.name
-    }
-}
-
-impl NamedObject for Function {
-    fn name(&self) -> &str {
-        &self.name
-    }
-}
-
-impl NamedObject for Type {
-    fn name(&self) -> &str {
-        &self.name
-    }
-}
-
 #[derive(Default)]
 pub struct IdVec<T: Default> {
     array: Vec<T>,
 
-    lookup: Vec<usize>,
     reverse_lookup: Vec<usize>,
-
-    hash_lookup: HashMap<usize, usize>,
+    lookup: HashMap<usize, usize>,
 }
 
 impl<'a, T: Default + Deserialize<'a>> IdVec<T> {
     pub fn insert(&mut self, id: usize, item: T) {
         self.array.push(item);
 
-        if id > self.lookup.len() {
-            self.hash_lookup.insert(id, self.reverse_lookup.len());
-        } else {
-            self.lookup.resize(id + 1, 0);
-            self.lookup[id] = self.reverse_lookup.len();
-        }
+        self.lookup.insert(id, self.reverse_lookup.len());
 
         self.reverse_lookup.push(id);
     }
@@ -150,12 +121,7 @@ impl<'a, T: Default + Deserialize<'a>> IdVec<T> {
     pub fn get(&self, id: usize) -> Option<&T> {
         let index;
 
-        if id > self.lookup.len() {
-            index = self.hash_lookup.get(&id)
-        } else {
-            index = self.lookup.get(id);
-        }
-
+        index = self.lookup.get(&id);
         let Some(index) = index else { return None };
 
         return Some(&self.array[*index]);
@@ -164,18 +130,11 @@ impl<'a, T: Default + Deserialize<'a>> IdVec<T> {
     pub fn get_mut(&mut self, id: usize) -> Option<&mut T> {
         let index;
 
-        if id > self.array.len() {
-            index = self.hash_lookup.get(&id)
-        } else {
-            index = self.lookup.get(id);
-        }
-
+        index = self.lookup.get(&id);
         let Some(index) = index else { return None };
 
         return Some(&mut self.array[*index]);
     }
-
-    pub fn rehash(&mut self) {}
 
     pub fn iter(&self) -> impl Iterator<Item = &T> + '_ {
         self.array.iter()

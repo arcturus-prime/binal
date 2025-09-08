@@ -3,22 +3,13 @@ import hashlib
 
 from binaryninja import (
     DataVariable,
-    SaveFileNameField,
     TypeClass,
     Type,
-    BinaryView,
-    Function,
-    QualifiedName,
-    BackgroundTaskThread,
-    BinaryDataNotification,
-    FunctionBuilder,
-    StructureBuilder,
-    SaveFileNameField
 )
 import binaryninja
 
 def hash_string(s: str):
-    return int(hashlib.sha1(s.encode("utf-8")).hexdigest(), 16) % (10 ** 6)
+    return str(int(hashlib.sha1(s.encode("utf-8")).hexdigest(), 16) % (10 ** 6))
 
 def lift_function(func):
     binal_functions = {}
@@ -75,6 +66,9 @@ def lift_type(type_: Type):
             ptr_base_type, binal_type["info"]["depth"] = get_pointer_info(type_);
             binal_type["info"]["value_type"] = hash_string(ptr_base_type.get_string())
 
+            if hash_string(ptr_base_type.get_string()) == "793658":
+                print(ptr_base_type)
+
             to_parse.append(ptr_base_type)
         elif type_.type_class == TypeClass.IntegerTypeClass:
             binal_type["info"] = { "kind": "int" if type_.signed else "uint" } 
@@ -96,6 +90,7 @@ def lift_type(type_: Type):
        
             for field in type_.members:
                 to_parse.append(field.type)
+    
                 binal_type["info"]["fields"].append({
                     "name": field.name,
                     "offset": field.offset,
@@ -109,15 +104,17 @@ def lift_type(type_: Type):
 
             for argument in type_.parameters:
                 binal_type["info"]["arg_types"].append(hash_string(argument.type.get_string()))
+                to_parse.append(argument.type)
 
         elif type_.type_class == TypeClass.ArrayTypeClass:
             to_parse.append(type_.element_type)
             binal_type["info"] = { "kind": "array", "item_type": hash_string(type_.element_type.get_string()) }
         elif type_.type_class == TypeClass.NamedTypeReferenceClass and type_.target(bv):
             to_parse.append(type_.target(bv))
-
-            # don't want named types in the list to be sent
-            continue
+            binal_type["info"] = { "kind": "typedef", "alias_type": hash_string(type_.target(bv).get_string()) }
+        elif type_.type_class == TypeClass.WideCharTypeClass:
+            binal_type["info"] = { "kind": "uint" }
+        elif type_.type_classq == TypeClass.ValueTypeClass
         else:
             # any other types shouldn't be sent either
             continue
@@ -129,8 +126,8 @@ def lift_type(type_: Type):
 def lift_data(data_: DataVariable):
     binal_types = lift_type(data_.type)
 
-    name = str(hash_string(data_.name)) if data_.name != None else str(data_.address)
-    binal_globals = { name:  { "kind": "data", "name": name, "location": data_.address, "data_type": hash_string(data_.type.get_string()) } }
+    name = hash_string(data_.name) if data_.name != None else str(data_.address)
+    binal_globals = { name:  { "kind": "data", "name": data_.name, "location": data_.address, "data_type": hash_string(data_.type.get_string()) } }
 
     return binal_globals, binal_types
 
