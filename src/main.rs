@@ -4,14 +4,7 @@ mod search;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use ir::Database;
-
-#[derive(Subcommand, Debug, Clone)]
-
-enum DatabaseEdit {
-    RemoveByName { name: String },
-    RemoveById { id: usize },
-}
+use ir::ExternalDatabase;
 
 #[derive(Subcommand, Debug, Clone)]
 enum Command {
@@ -21,12 +14,6 @@ enum Command {
     Merge {
         destination: PathBuf,
         source: PathBuf,
-    },
-    Edit {
-        target: PathBuf,
-
-        #[command(subcommand)]
-        command: DatabaseEdit,
     },
 }
 
@@ -43,7 +30,7 @@ fn main() {
 
     match args.command {
         Command::Create { destination } => {
-            let db = Database::default();
+            let db = ExternalDatabase::default();
 
             db.save(&destination).unwrap()
         }
@@ -51,6 +38,5 @@ fn main() {
             destination,
             source,
         } => {}
-        Command::Edit { target, command } => {}
     }
 }

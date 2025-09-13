@@ -32,20 +32,17 @@ struct UnionMember {
 #[serde(rename_all(deserialize = "lowercase", serialize = "lowercase"))]
 enum TypeInfo {
     Struct {
-        name: String,
         fields: Vec<StructMember>,
     },
     Enum {
-        name: String,
         values: Vec<EnumValue>,
     },
     Union {
-        name: String,
         fields: Vec<UnionMember>,
     },
     TypeDef {
-        name: String,
         alias_type: usize,
+        name: String,
     },
     Function {
         arg_types: Vec<usize>,
@@ -72,7 +69,7 @@ impl Default for TypeInfo {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
-pub struct Type {
+pub struct ExternalType {
     size: usize,
     alignment: usize,
     info: TypeInfo,
@@ -85,7 +82,7 @@ struct FunctionArgument {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
-pub struct Function {
+pub struct ExternalFunction {
     name: String,
     location: usize,
 
@@ -94,59 +91,59 @@ pub struct Function {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
-pub struct Data {
+pub struct ExternalData {
     name: String,
     location: usize,
     data_type: usize,
 }
 
 #[derive(Default, Deserialize, Serialize)]
-pub struct Database {
-    pub functions: HashMap<usize, Function>,
-    pub types: HashMap<usize, Type>,
-    pub data: HashMap<usize, Data>,
+pub struct ExternalDatabase {
+    pub functions: HashMap<usize, ExternalFunction>,
+    pub types: HashMap<usize, ExternalType>,
+    pub data: HashMap<usize, ExternalData>,
 }
 
 #[derive(Debug)]
-pub enum DatabaseError {
+pub enum ExternalDatabaseError {
     Io(std::io::Error),
     Serde(serde_json::Error),
 }
 
-impl From<std::io::Error> for DatabaseError {
+impl From<std::io::Error> for ExternalDatabaseError {
     fn from(value: std::io::Error) -> Self {
         Self::Io(value)
     }
 }
 
-impl From<serde_json::Error> for DatabaseError {
+impl From<serde_json::Error> for ExternalDatabaseError {
     fn from(value: serde_json::Error) -> Self {
         Self::Serde(value)
     }
 }
 
-impl<'a> Display for DatabaseError {
+impl<'a> Display for ExternalDatabaseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DatabaseError::Io(e) => e.fmt(f),
-            DatabaseError::Serde(e) => e.fmt(f),
+            ExternalDatabaseError::Io(e) => e.fmt(f),
+            ExternalDatabaseError::Serde(e) => e.fmt(f),
         }
     }
 }
 
-impl Database {
-    pub fn open(path: &Path) -> Result<Self, DatabaseError> {
+impl ExternalDatabase {
+    pub fn open(path: &Path) -> Result<Self, ExternalDatabaseError> {
         let mut project_file = File::open(&path)?;
         let mut project_data = Vec::<u8>::new();
 
         project_file.read_to_end(&mut project_data)?;
 
-        let db: Database = serde_json::from_slice(&project_data)?;
+        let db: ExternalDatabase = serde_json::from_slice(&project_data)?;
 
         Ok(db)
     }
 
-    pub fn save(&self, path: &Path) -> Result<(), DatabaseError> {
+    pub fn save(&self, path: &Path) -> Result<(), ExternalDatabaseError> {
         let mut file;
 
         if !path.exists() {
@@ -160,4 +157,8 @@ impl Database {
 
         Ok(())
     }
+}
+
+pub enum ExternalCommand {
+    CreateType,
 }
