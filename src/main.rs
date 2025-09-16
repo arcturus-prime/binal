@@ -1,10 +1,12 @@
+mod external;
 mod ir;
 mod search;
+mod x86;
 
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use ir::ExternalDatabase;
+use external::ExternalDatabase;
 
 #[derive(Subcommand, Debug, Clone)]
 enum Command {

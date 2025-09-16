@@ -40,7 +40,7 @@ impl<T: Default> SearchTree<T> {
     pub fn insert(&mut self, key: &str, data: T) {
         let mut index = 0;
 
-        let mut iter = key.bytes();
+        let mut iter = key.bytes()
         loop {
             let Some(next_char) = iter.next() else {
                 break;
