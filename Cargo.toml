@@ -6,7 +6,10 @@ edition = "2021"
 [dependencies]
 clap = { version = "4.5.46", features = ["derive"] }
 env_logger = "0.11.6"
+iced-x86 = "1.21.0"
+leb128 = "0.2.5"
 log = "0.4.22"
+num-traits = "0.2.19"
 num_enum = "0.7.4"
 serde = { version = "1.0.204", features = ["derive"]}
 serde-aux = "4.7.0"
