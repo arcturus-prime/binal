@@ -1,50 +1,64 @@
 use num_enum::TryFromPrimitive;
-use num_traits::PrimInt;
 
 #[repr(u8)]
 #[derive(TryFromPrimitive, Copy, Clone)]
 pub enum Instruction {
-    Register = 0, // space, address, size
-    Constant,
-    Assign,         // left, right
-    Add,            // left right
-    Sub,            // left right
-    Mul,            // left right
-    Div,            // left right
-    Mod,            // left right
-    Neg,            // operand
-    And,            // left right
-    Or,             // left right
-    Xor,            // left right
-    Not,            // operand
-    FAdd,           // left right
-    FSub,           // left right
-    FMul,           // left right
-    FDiv,           // left right
-    FMod,           // left right
-    FNeg,           // operand
-    Eq,             // left right
-    Neq,            // left right
-    Lt,             // left right
-    Lte,            // left right
-    Gt,             // left right
-    Gte,            // left right
-    Flt,            // left right
-    Flte,           // left right
-    Fgt,            // left right
-    Fgte,           // left right
-    BodyCreate,     //
-    BodyAppend,     // body, statement
-    FunctionCreate, // body, id
-    FunctionCall,   // id
-    IfCreate,       // body, condition
+    String,
+    Unsigned,
+    Signed,
+    Float,
+    Double,
+
+    Register, // name, space, offset, size
+    Copy,     // offset
+
+    Add,  // left right
+    Sub,  // left right
+    Mul,  // left right
+    Div,  // left right
+    Mod,  // left right
+    Neg,  // operand
+    And,  // left right
+    Or,   // left right
+    Xor,  // left right
+    Not,  // operand
+    FAdd, // left right
+    FSub, // left right
+    FMul, // left right
+    FDiv, // left right
+    FMod, // left right
+    FNeg, // operand
+    Eq,   // left right
+    Neq,  // left right
+    Lt,   // left right
+    Lte,  // left right
+    Gt,   // left right
+    Gte,  // left right
+    Flt,  // left right
+    Flte, // left right
+    Fgt,  // left right
+    Fgte, // left right
+
+    ArgumentsCreate,
+    ArgumentsAppend,
+
+    Assign,       // left, right
+    FunctionCall, // function, arguments
+
+    BodyCreate,
+    BodyAppend,
+
+    FunctionCreate, // name, body
+    IfCreate,       // condition, body
 }
 
 impl Instruction {
     pub fn argument_count(self) -> usize {
         match self {
-            Instruction::Register => 3,
-            Instruction::Assign => 2,
+            Instruction::String => 0,
+            Instruction::Unsigned => 0,
+            Instruction::Signed => 0,
+            Instruction::Float => 0,
             Instruction::Add => 2,
             Instruction::Sub => 2,
             Instruction::Mul => 2,
@@ -61,11 +75,8 @@ impl Instruction {
             Instruction::FDiv => 2,
             Instruction::FMod => 2,
             Instruction::FNeg => 1,
-            Instruction::BodyCreate => 0,
-            Instruction::BodyAppend => 2,
             Instruction::FunctionCreate => 2,
             Instruction::FunctionCall => 1,
-            Instruction::Constant => 0,
             Instruction::Eq => 2,
             Instruction::Neq => 2,
             Instruction::Lt => 2,
@@ -77,6 +88,14 @@ impl Instruction {
             Instruction::Fgt => 2,
             Instruction::Fgte => 2,
             Instruction::IfCreate => 2,
+            Instruction::Register => 4,
+            Instruction::Copy => 1,
+            Instruction::Assign => 2,
+            Instruction::Double => 0,
+            Instruction::BodyCreate => 0,
+            Instruction::BodyAppend => 2,
+            Instruction::ArgumentsCreate => 0,
+            Instruction::ArgumentsAppend => 2,
         }
     }
 }
@@ -84,6 +103,7 @@ impl Instruction {
 #[derive(Debug)]
 pub enum PrintInstructionError {
     MalformedProgram(usize),
+    IncorrectlySizedConstant,
 }
 
 fn pop_safe(
@@ -97,20 +117,92 @@ fn pop_safe(
     Ok(string)
 }
 
+fn print_float(constant: &[u8]) -> Result<String, PrintInstructionError> {
+    if constant.len() > 5 {
+        return Err(PrintInstructionError::IncorrectlySizedConstant);
+    }
+
+    let mut raw_number: u32 = 0;
+    for v in constant {
+        raw_number += *v as u32 & 0x7F;
+    }
+
+    Ok(f32::from_ne_bytes(raw_number.to_ne_bytes()).to_string())
+}
+
+fn print_double(constant: &[u8]) -> Result<String, PrintInstructionError> {
+    if constant.len() > 9 {
+        return Err(PrintInstructionError::IncorrectlySizedConstant);
+    }
+
+    let mut raw_number: u64 = 0;
+    for v in constant {
+        raw_number += *v as u64 & 0x7F;
+    }
+
+    Ok(f64::from_ne_bytes(raw_number.to_ne_bytes()).to_string())
+}
+
+fn print_unsigned(constant: &[u8]) -> Result<String, PrintInstructionError> {
+    if constant.len() > 18 {
+        return Err(PrintInstructionError::IncorrectlySizedConstant);
+    }
+
+    let mut raw_number: u128 = 0;
+
+    for v in constant {
+        raw_number += *v as u128 & 0x7F;
+    }
+
+    Ok(raw_number.to_string())
+}
+
+fn print_signed(constant: &[u8]) -> Result<String, PrintInstructionError> {
+    if constant.len() > 18 {
+        return Err(PrintInstructionError::IncorrectlySizedConstant);
+    }
+
+    let mut raw_number: i128 = 0;
+    for v in constant {
+        raw_number += *v as i128;
+    }
+
+    Ok(raw_number.to_string())
+}
+
+fn print_string(constant: &[u8]) -> String {
+    let mut string = String::new();
+
+    for v in constant {
+        string.push((*v & 0x7F) as char)
+    }
+
+    string
+}
+
 pub fn print_instructions(code: &[u8]) -> Result<String, PrintInstructionError> {
     let mut stack = Vec::<String>::new();
+    let mut constant = Vec::new();
 
     let i = 0;
     while i < code.len() {
         let byte = code[i];
+
+        if byte >= 128 {
+            constant.push(0x7F & byte);
+            continue;
+        }
 
         let Ok(inst) = byte.try_into() else {
             return Err(PrintInstructionError::MalformedProgram(i));
         };
 
         let new_string = match inst {
-            Instruction::Register => format!(),
-            Instruction::Constant => format!(),
+            Instruction::Unsigned => print_unsigned(&constant)?,
+            Instruction::Signed => print_signed(&constant)?,
+            Instruction::Float => print_float(&constant)?,
+            Instruction::Double => print_double(&constant)?,
+            Instruction::String => print_string(&constant),
             Instruction::Assign => format!(
                 "{} = {}",
                 pop_safe(i, &mut stack)?,
@@ -249,6 +341,10 @@ pub fn print_instructions(code: &[u8]) -> Result<String, PrintInstructionError> 
                 pop_safe(i, &mut stack)?,
                 pop_safe(i, &mut stack)?.replace("\n", "\n\t")
             ),
+            Instruction::Register => todo!(),
+            Instruction::Copy => todo!(),
+            Instruction::ArgumentsCreate => todo!(),
+            Instruction::ArgumentsAppend => todo!(),
         };
 
         stack.push(new_string)
@@ -261,21 +357,26 @@ pub fn print_instructions(code: &[u8]) -> Result<String, PrintInstructionError> 
     Ok(final_output)
 }
 
-pub fn emit_constant<T: PrimInt>(value: T, code: &mut Vec<u8>) {
-    let mut value = value.to_u128().unwrap_or(unsafe {
-        std::mem::transmute::<i128, u128>(value.to_i128().unwrap_unchecked())
-    });
+pub fn emit_signed(code: &mut Vec<u8>, number: i128) {
+    let mut number_unsigned: u128 = unsafe { std::mem::transmute(number) };
 
-    code.push(Instruction::BeginConstant as u8);
-    loop {
-        let piece = value & 0xFF;
-        value >>= 8;
+    let mut number_bytes: Vec<u8> = vec![(number_unsigned & 0x7F) as u8];
+    number_unsigned >>= 7;
 
-        code.push(piece as u8);
+    while number_unsigned != 0 {
+        number_bytes.push((number_unsigned & 0x7F) as u8);
+        number_unsigned >>= 7;
+    }
 
-        if value == 0 {
-            break;
+    if *number_bytes.last().unwrap() & 0x80 != 0 {
+        let mut carry = 1;
+        for v in number_bytes.iter_mut() {
+            *v = !*v;
+            *v += carry;
+
+            carry = (*v == 0) as u8;
         }
     }
-    code.push(Instruction::EndConstant as u8);
+
+    code.append(&mut number_bytes);
 }
