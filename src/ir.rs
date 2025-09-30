@@ -3,62 +3,58 @@ use num_enum::TryFromPrimitive;
 #[repr(u8)]
 #[derive(TryFromPrimitive, Copy, Clone)]
 pub enum Instruction {
-    String,
-    Unsigned,
-    Signed,
-    Float,
-    Double,
+    // Casts
+    String,   // value
+    Unsigned, // value
+    Signed,   // value
+    Float,    // value
+    Double,   // value
+    Boolean,  // value
+    Vector,   // value, count, type
 
-    Register, // name, space, offset, size
-    Copy,     // offset
+    // Expressions
+    Add, // left right
+    Sub, // left right
+    Mul, // left right
+    Div, // left right
+    Mod, // left right
+    Neg, // operand
+    And, // left right
+    Or,  // left right
+    Xor, // left right
+    Not, // operand
+    Eq,  // left right
+    Neq, // left right
+    Lt,  // left right
+    Lte, // left right
+    Gt,  // left right
+    Gte, // left right
 
-    Add,  // left right
-    Sub,  // left right
-    Mul,  // left right
-    Div,  // left right
-    Mod,  // left right
-    Neg,  // operand
-    And,  // left right
-    Or,   // left right
-    Xor,  // left right
-    Not,  // operand
-    FAdd, // left right
-    FSub, // left right
-    FMul, // left right
-    FDiv, // left right
-    FMod, // left right
-    FNeg, // operand
-    Eq,   // left right
-    Neq,  // left right
-    Lt,   // left right
-    Lte,  // left right
-    Gt,   // left right
-    Gte,  // left right
-    Flt,  // left right
-    Flte, // left right
-    Fgt,  // left right
-    Fgte, // left right
+    // Statements
+    Store,    // register_number, value
+    Load,     // register_number
+    Call,     // value, arguments
+    Register, // space, offset, size, name, register_number
+    Comment,  // string
 
+    // Aux
     ArgumentsCreate,
-    ArgumentsAppend,
-
-    Assign,       // left, right
-    FunctionCall, // function, arguments
+    ArgumentsAppend, // arguments, value
 
     BodyCreate,
-    BodyAppend,
+    BodyAppend, // body, statement
 
-    FunctionCreate, // name, body
-    IfCreate,       // condition, body
+    IfCreate,    // condition, body
+    WhileCreate, // condition, body
 }
 
 impl Instruction {
     pub fn argument_count(self) -> usize {
         match self {
-            Instruction::String => 0,
-            Instruction::Unsigned => 0,
-            Instruction::Signed => 0,
-            Instruction::Float => 0,
+            Instruction::String => 1,
+            Instruction::Unsigned => 1,
+            Instruction::Signed => 1,
+            Instruction::Float => 1,
             Instruction::Add => 2,
             Instruction::Sub => 2,
             Instruction::Mul => 2,
@@ -69,33 +65,26 @@ impl Instruction {
             Instruction::Or => 2,
             Instruction::Xor => 2,
             Instruction::Not => 1,
-            Instruction::FAdd => 2,
-            Instruction::FSub => 2,
-            Instruction::FMul => 2,
-            Instruction::FDiv => 2,
-            Instruction::FMod => 2,
-            Instruction::FNeg => 1,
-            Instruction::FunctionCreate => 2,
-            Instruction::FunctionCall => 1,
             Instruction::Eq => 2,
             Instruction::Neq => 2,
             Instruction::Lt => 2,
             Instruction::Lte => 2,
             Instruction::Gt => 2,
             Instruction::Gte => 2,
-            Instruction::Flt => 2,
-            Instruction::Flte => 2,
-            Instruction::Fgt => 2,
-            Instruction::Fgte => 2,
             Instruction::IfCreate => 2,
             Instruction::Register => 4,
-            Instruction::Copy => 1,
-            Instruction::Assign => 2,
-            Instruction::Double => 0,
+            Instruction::Double => 1,
             Instruction::BodyCreate => 0,
             Instruction::BodyAppend => 2,
             Instruction::ArgumentsCreate => 0,
             Instruction::ArgumentsAppend => 2,
+            Instruction::Store => 2,
+            Instruction::Load => 1,
+            Instruction::Call => 2,
+            Instruction::Comment => 1,
+            Instruction::WhileCreate => 2,
+            Instruction::Boolean => 1,
+            Instruction::Vector => 3,
         }
     }
 }
@@ -364,7 +353,7 @@ pub fn emit_signed(code: &mut Vec<u8>, number: i128) {
     number_unsigned >>= 7;
 
     while number_unsigned != 0 {
-        number_bytes.push((number_unsigned & 0x7F) as u8);
+        number_bytes.push((number_unsigned & 0x7F | 0x80) as u8);
         number_unsigned >>= 7;
     }
 
@@ -379,4 +368,33 @@ pub fn emit_signed(code: &mut Vec<u8>, number: i128) {
     }
 
     code.append(&mut number_bytes);
+}
+
+pub fn emit_unsigned(code: &mut Vec<u8>, mut number: u128) {
+    while number != 0 {
+        code.push((number & 0x7F | 0x80) as u8);
+        number >>= 7;
+    }
+}
+
+pub fn emit_float(code: &mut Vec<u8>, number: f32) {
+    let mut number_unsigned: u32 = unsafe { std::mem::transmute(number) };
+
+    while number_unsigned != 0 {
+        code.push((number_unsigned & 0x7F | 0x80) as u8);
+        number_unsigned >>= 7;
+    }
+}
+
+pub fn emit_double(code: &mut Vec<u8>, number: f64) {
+    let mut number_unsigned: u64 = unsafe { std::mem::transmute(number) };
+
+    while number_unsigned != 0 {
+        code.push((number_unsigned & 0x7F | 0x80) as u8);
+        number_unsigned >>= 7;
+    }
+}
+
+pub fn emit_string(code: &mut Vec<u8>, string: String) {
+    todo!()
 }
