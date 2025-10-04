@@ -1,23 +1,10 @@
+use crate::x86::lift_program;
+
 mod external;
 mod ir;
 mod x86;
 
-use clap::{Parser, Subcommand};
-use ir::print_instructions;
-use x86::lift_block;
-
-#[derive(Subcommand, Debug, Clone)]
-enum Command {}
-
-#[derive(Parser, Debug)]
-#[command(version, about)]
-struct Arguments {
-    #[command(subcommand)]
-    command: Command,
-}
-
 fn main() {
-    env_logger::init();
     let code = [
         0x48, 0x83, 0xec, 0x78, 0x48, 0x89, 0x4c, 0x24, 0x30, 0x48, 0x89, 0x4c, 0x24, 0x70, 0x48,
         0x83, 0xc1, 0x18, 0x48, 0x89, 0x4c, 0x24, 0x28, 0x48, 0x8d, 0x4c, 0x24, 0x40, 0xe8, 0x8f,
@@ -29,8 +16,7 @@ fn main() {
         0x78, 0xc3,
     ];
 
-    let out_code = lift_block(&code, 0);
-    let output = print_instructions(&out_code).unwrap();
+    let out_code = lift_program(&code, 0);
 
-    println!("{}", output)
+    println!("{:?}", out_code);
 }

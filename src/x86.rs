@@ -1,4 +1,4 @@
-use crate::ir::{Instruction, ProgramWriter};
+use crate::ir::{Instruction, LifterErrors, ProgramWriter};
 use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind, Register, RflagsBits};
 
 fn emit_memory_operand(inst: iced_x86::Instruction, code: &mut ProgramWriter) {
@@ -73,28 +73,29 @@ fn lift_conditional_jump(
     writer: &mut ProgramWriter,
     flags: u32,
 ) {
-    let ip = return_to_address.pop().unwrap();
+    return_to_address.pop().unwrap();
     return_to_address.push(inst.near_branch64());
     return_to_address.push(decoder.ip());
 
     writer.emit_constant(flags);
     writer.emit_constant(0);
     writer.emit_constant(32);
+    writer.emit_instruction(Instruction::Register);
     writer.emit_instruction(Instruction::Or);
     writer.emit_constant(flags);
     writer.emit_instruction(Instruction::Eq);
 
-    writer.emit_instruction(Instruction::IfEnter);
+    writer.emit_instruction(Instruction::IfCreate);
     writer.emit_constant(inst.near_branch64());
     writer.emit_instruction(Instruction::Goto);
-    writer.emit_instruction(Instruction::ElseEnter);
+    writer.emit_instruction(Instruction::ElseCreate);
     writer.emit_constant(decoder.ip());
     writer.emit_instruction(Instruction::Goto);
-    writer.emit_instruction(Instruction::Exit);
-    writer.emit_instruction(Instruction::Exit);
+    writer.emit_instruction(Instruction::End);
+    writer.emit_instruction(Instruction::End);
 
     writer.emit_constant(decoder.ip());
-    writer.emit_instruction(Instruction::BlockEnter);
+    writer.emit_instruction(Instruction::BlockCreate);
 }
 
 fn lift_always_jump(
@@ -103,16 +104,29 @@ fn lift_always_jump(
     return_to_address: &mut Vec<u64>,
     writer: &mut ProgramWriter,
 ) {
-    let ip = return_to_address.pop().unwrap();
+    return_to_address.pop().unwrap();
     return_to_address.push(decoder.ip());
 
+    let mut destination = None;
     if inst.op0_kind() == OpKind::NearBranch64 {
-        return_to_address.push(inst.near_branch64());
+        destination = Some(inst.near_branch64());
     } else {
         //TODO: solve for destination
     }
 
-    writer.emit_instruction(Instruction::Goto);
+    if let Some(destination) = destination {
+        writer.emit_constant(destination);
+        writer.emit_instruction(Instruction::Goto);
+
+        return_to_address.push(destination);
+    } else {
+        writer.emit_constant(LifterErrors::CouldNotResolveJump as u8);
+        writer.emit_instruction(Instruction::LifterError);
+    }
+
+    writer.emit_instruction(Instruction::End);
+    writer.emit_constant(decoder.ip());
+    writer.emit_instruction(Instruction::BlockCreate);
 }
 
 fn lift_simple_binary_op(
@@ -132,7 +146,7 @@ pub fn lift_program(code: &[u8], ip: u64) -> Vec<u8> {
 
     decoder.set_ip(ip);
 
-    let mut return_to_address = Vec::new();
+    let mut return_to_address = vec![ip];
     let mut writer = ProgramWriter::default();
 
     while decoder.can_decode() {
@@ -164,6 +178,15 @@ pub fn lift_program(code: &[u8], ip: u64) -> Vec<u8> {
             Mnemonic::Or => lift_simple_binary_op(inst, &mut writer, Instruction::Or),
             Mnemonic::Shr => lift_simple_binary_op(inst, &mut writer, Instruction::RShift),
             Mnemonic::Shl => lift_simple_binary_op(inst, &mut writer, Instruction::LShift),
+            Mnemonic::Ret => {
+                return_to_address.pop().unwrap();
+                let ip = return_to_address.last().unwrap();
+
+                decoder.set_ip(*ip);
+                writer.emit_instruction(Instruction::End);
+
+                // TODO: handle return
+            }
             _ => {}
         }
     }
