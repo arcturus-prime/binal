@@ -1,16 +1,18 @@
-use crate::ir::{Instruction, LifterErrors, ProgramWriter};
+use std::collections::{HashMap, VecDeque};
+
+use crate::ir::{Instruction, ProgramWriter};
 use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind, Register, RflagsBits};
 
-fn emit_memory_operand(inst: iced_x86::Instruction, code: &mut ProgramWriter) {
+fn emit_memory_offset(inst: iced_x86::Instruction, code: &mut ProgramWriter) {
     let mut to_add = 0;
 
     if inst.memory_base() != Register::None {
-        emit_register_operand(inst.memory_base(), code);
+        emit_register_read(inst.memory_base(), code);
         to_add += 1;
     }
 
     if inst.memory_index() != Register::None {
-        emit_register_operand(inst.memory_index(), code);
+        emit_register_read(inst.memory_index(), code);
 
         if inst.memory_index_scale() != 1 {
             code.emit_constant(inst.memory_index_scale());
@@ -21,7 +23,7 @@ fn emit_memory_operand(inst: iced_x86::Instruction, code: &mut ProgramWriter) {
     }
 
     if inst.memory_displacement64() != 0 {
-        code.emit_constant(inst.memory_displacement64() * 8);
+        code.emit_constant(inst.memory_displacement64());
         to_add += 1;
     }
 
@@ -30,20 +32,32 @@ fn emit_memory_operand(inst: iced_x86::Instruction, code: &mut ProgramWriter) {
     }
 }
 
-fn emit_register_operand(register: Register, code: &mut ProgramWriter) {
-    code.emit_constant(register.full_register() as usize * 8);
+fn emit_register_read(register: Register, code: &mut ProgramWriter) {
     code.emit_constant(register.size());
-    code.emit_instruction(Instruction::Register)
+    code.emit_instruction(Instruction::U8);
+    code.emit_constant(register.full_register() as u64);
+    code.emit_instruction(Instruction::U64);
+    code.emit_instruction(Instruction::Load)
 }
 
-fn lift_operand(instruction: iced_x86::Instruction, operand_number: u32, code: &mut ProgramWriter) {
+fn emit_register_write(register: Register, code: &mut ProgramWriter) {
+    code.emit_constant(register.full_register() as u64);
+    code.emit_instruction(Instruction::U64);
+    code.emit_instruction(Instruction::Store);
+}
+
+fn emit_operand_read(
+    instruction: iced_x86::Instruction,
+    operand_number: u32,
+    code: &mut ProgramWriter,
+) {
     match instruction.op_kind(operand_number) {
-        OpKind::Register => emit_register_operand(instruction.op_register(operand_number), code),
+        OpKind::Register => emit_register_read(instruction.op_register(operand_number), code),
         OpKind::NearBranch16
         | OpKind::NearBranch32
         | OpKind::NearBranch64
         | OpKind::FarBranch16
-        | OpKind::FarBranch32 => panic!("Cannot lift branch operand"),
+        | OpKind::FarBranch32 => panic!("Cannot read branch"),
         OpKind::Immediate8
         | OpKind::Immediate8_2nd
         | OpKind::Immediate16
@@ -62,134 +76,189 @@ fn lift_operand(instruction: iced_x86::Instruction, operand_number: u32, code: &
         OpKind::MemoryESDI => todo!(),
         OpKind::MemoryESEDI => todo!(),
         OpKind::MemoryESRDI => todo!(),
-        OpKind::Memory => emit_memory_operand(instruction, code),
+        OpKind::Memory => {
+            code.emit_constant(instruction.memory_size() as usize);
+            code.emit_instruction(Instruction::U8);
+            emit_memory_offset(instruction, code);
+            code.emit_instruction(Instruction::Load)
+        }
     }
 }
 
-fn lift_conditional_jump(
-    decoder: &mut Decoder,
-    inst: iced_x86::Instruction,
-    return_to_address: &mut Vec<u64>,
-    writer: &mut ProgramWriter,
-    flags: u32,
+fn emit_operand_write(
+    instruction: iced_x86::Instruction,
+    operand_number: u32,
+    code: &mut ProgramWriter,
 ) {
-    return_to_address.pop().unwrap();
-    return_to_address.push(inst.near_branch64());
-    return_to_address.push(decoder.ip());
+    match instruction.op_kind(operand_number) {
+        OpKind::Register => emit_register_write(instruction.op_register(operand_number), code),
+        OpKind::NearBranch16
+        | OpKind::NearBranch32
+        | OpKind::NearBranch64
+        | OpKind::FarBranch16
+        | OpKind::FarBranch32 => panic!("Cannot write to branch"),
+        OpKind::Immediate8
+        | OpKind::Immediate8_2nd
+        | OpKind::Immediate16
+        | OpKind::Immediate32
+        | OpKind::Immediate64
+        | OpKind::Immediate8to16
+        | OpKind::Immediate8to32
+        | OpKind::Immediate8to64
+        | OpKind::Immediate32to64 => panic!("Cannot write to immediate"),
+        OpKind::MemorySegSI => todo!(),
+        OpKind::MemorySegESI => todo!(),
+        OpKind::MemorySegRSI => todo!(),
+        OpKind::MemorySegDI => todo!(),
+        OpKind::MemorySegEDI => todo!(),
+        OpKind::MemorySegRDI => todo!(),
+        OpKind::MemoryESDI => todo!(),
+        OpKind::MemoryESEDI => todo!(),
+        OpKind::MemoryESRDI => todo!(),
+        OpKind::Memory => {
+            emit_memory_offset(instruction, code);
+            code.emit_instruction(Instruction::Store)
+        }
+    }
+}
 
+fn emit_binary_operation(
+    operation: Instruction,
+    instruction: iced_x86::Instruction,
+    writer: &mut ProgramWriter,
+) {
+    emit_operand_read(instruction, 0, writer);
+    emit_operand_read(instruction, 1, writer);
+    writer.emit_instruction(operation);
+    emit_operand_write(instruction, 0, writer);
+}
+
+fn emit_flag_condition(flags: u32, writer: &mut ProgramWriter) {
+    writer.emit_constant(4);
+    writer.emit_instruction(Instruction::U8);
+    writer.emit_constant(512 * 512);
+    writer.emit_instruction(Instruction::U64);
+    writer.emit_instruction(Instruction::Load);
     writer.emit_constant(flags);
-    writer.emit_constant(0);
-    writer.emit_constant(32);
-    writer.emit_instruction(Instruction::Register);
     writer.emit_instruction(Instruction::Or);
     writer.emit_constant(flags);
     writer.emit_instruction(Instruction::Eq);
-
-    writer.emit_instruction(Instruction::IfCreate);
-    writer.emit_constant(inst.near_branch64());
-    writer.emit_instruction(Instruction::Goto);
-    writer.emit_instruction(Instruction::ElseCreate);
-    writer.emit_constant(decoder.ip());
-    writer.emit_instruction(Instruction::Goto);
-    writer.emit_instruction(Instruction::End);
-    writer.emit_instruction(Instruction::End);
-
-    writer.emit_constant(decoder.ip());
-    writer.emit_instruction(Instruction::BlockCreate);
 }
 
-fn lift_always_jump(
-    decoder: &mut Decoder,
-    inst: iced_x86::Instruction,
-    return_to_address: &mut Vec<u64>,
-    writer: &mut ProgramWriter,
-) {
-    return_to_address.pop().unwrap();
-    return_to_address.push(decoder.ip());
+pub fn set_decoder_position(decoder: &mut Decoder, position: u64) -> Result<(), X86LiftError> {
+    let Ok(_) = decoder.set_position(position as usize) else {
+        return Err(X86LiftError::DecodeOutOfBounds(position));
+    };
 
-    let mut destination = None;
-    if inst.op0_kind() == OpKind::NearBranch64 {
-        destination = Some(inst.near_branch64());
+    decoder.set_ip(position);
+
+    Ok(())
+}
+
+#[derive(Debug)]
+pub enum X86LiftError {
+    DecodeOutOfBounds(u64),
+}
+
+fn resolve_jump_target(instruction: iced_x86::Instruction) -> Option<(u64, bool, bool)> {
+    if instruction.is_call_near_indirect() {
+        // TODO: attempt to resolve
+        Some((0, true, false))
+    } else if instruction.is_jmp_near_indirect() {
+        // TODO: attempt to resolve
+        Some((0, false, false))
+    } else if instruction.is_jcc_short_or_near() || instruction.is_call_near() {
+        Some((instruction.near_branch_target(), true, true))
+    } else if instruction.is_jmp_short_or_near() {
+        Some((instruction.near_branch_target(), false, true))
+    } else if instruction.mnemonic() == Mnemonic::Ret || instruction.mnemonic() == Mnemonic::Int3 {
+        Some((0, false, false))
     } else {
-        //TODO: solve for destination
+        None
     }
-
-    if let Some(destination) = destination {
-        writer.emit_constant(destination);
-        writer.emit_instruction(Instruction::Goto);
-
-        return_to_address.push(destination);
-    } else {
-        writer.emit_constant(LifterErrors::CouldNotResolveJump as u8);
-        writer.emit_instruction(Instruction::LifterError);
-    }
-
-    writer.emit_instruction(Instruction::End);
-    writer.emit_constant(decoder.ip());
-    writer.emit_instruction(Instruction::BlockCreate);
 }
 
-fn lift_simple_binary_op(
-    iced_instruction: iced_x86::Instruction,
-    writer: &mut ProgramWriter,
-    instruction: Instruction,
-) {
-    lift_operand(iced_instruction, 0, writer);
-    lift_operand(iced_instruction, 1, writer);
-    writer.emit_instruction(instruction);
-    lift_operand(iced_instruction, 0, writer);
-    writer.emit_instruction(Instruction::Assign);
+#[derive(Debug)]
+pub struct UnliftedBlock {
+    pub code: Vec<iced_x86::Instruction>,
+    pub targets: Vec<u64>,
 }
 
-pub fn lift_program(code: &[u8], ip: u64) -> Vec<u8> {
+pub fn lift_control_flow(
+    code: &[u8],
+    position: u64,
+) -> Result<HashMap<u64, UnliftedBlock>, X86LiftError> {
+    let mut queue = VecDeque::new();
     let mut decoder = Decoder::new(64, code, DecoderOptions::NONE);
 
-    decoder.set_ip(ip);
+    queue.push_back(position);
 
-    let mut return_to_address = vec![ip];
+    set_decoder_position(&mut decoder, position)?;
+
+    let mut blocks = HashMap::new();
+    let mut block_start = position;
+    let mut block = vec![];
+    while !queue.is_empty() {
+        if blocks.contains_key(&block_start) {
+            block_start = queue.pop_front().unwrap();
+            set_decoder_position(&mut decoder, block_start)?;
+
+            continue;
+        }
+
+        let instruction = decoder.decode();
+        let jump_target = resolve_jump_target(instruction);
+
+        block.push(instruction);
+
+        if let Some((target, should_return, should_use_target)) = jump_target {
+            let mut targets = vec![];
+
+            if should_return {
+                queue.push_back(decoder.ip());
+                targets.push(decoder.ip())
+            }
+
+            if should_use_target {
+                queue.push_back(target);
+                targets.push(target);
+            }
+
+            blocks.insert(
+                block_start,
+                UnliftedBlock {
+                    code: std::mem::take(&mut block),
+                    targets,
+                },
+            );
+        }
+    }
+
+    Ok(blocks)
+}
+
+pub fn lift_block(block: &[iced_x86::Instruction]) -> Result<Vec<u8>, X86LiftError> {
     let mut writer = ProgramWriter::default();
 
-    while decoder.can_decode() {
-        let inst = decoder.decode();
-
-        match inst.mnemonic() {
+    for x in block {
+        match x.mnemonic() {
             Mnemonic::Mov => {
-                lift_operand(inst, 0, &mut writer);
-                lift_operand(inst, 1, &mut writer);
-                writer.emit_instruction(Instruction::Assign);
+                emit_operand_read(*x, 1, &mut writer);
+                emit_operand_write(*x, 0, &mut writer);
             }
-            Mnemonic::Sub => lift_simple_binary_op(inst, &mut writer, Instruction::Sub),
-            Mnemonic::Add => lift_simple_binary_op(inst, &mut writer, Instruction::Add),
-            Mnemonic::Call => {
-                lift_always_jump(&mut decoder, inst, &mut return_to_address, &mut writer)
-            }
-            Mnemonic::Jmp => {
-                lift_always_jump(&mut decoder, inst, &mut return_to_address, &mut writer)
-            }
-            Mnemonic::Je => lift_conditional_jump(
-                &mut decoder,
-                inst,
-                &mut return_to_address,
-                &mut writer,
-                RflagsBits::ZF,
-            ),
-            Mnemonic::Xor => lift_simple_binary_op(inst, &mut writer, Instruction::Xor),
-            Mnemonic::And => lift_simple_binary_op(inst, &mut writer, Instruction::And),
-            Mnemonic::Or => lift_simple_binary_op(inst, &mut writer, Instruction::Or),
-            Mnemonic::Shr => lift_simple_binary_op(inst, &mut writer, Instruction::RShift),
-            Mnemonic::Shl => lift_simple_binary_op(inst, &mut writer, Instruction::LShift),
+            Mnemonic::Sub => emit_binary_operation(Instruction::Sub, *x, &mut writer),
+            Mnemonic::Add => emit_binary_operation(Instruction::Add, *x, &mut writer),
+            Mnemonic::Xor => emit_binary_operation(Instruction::Xor, *x, &mut writer),
+            Mnemonic::And => emit_binary_operation(Instruction::And, *x, &mut writer),
+            Mnemonic::Or => emit_binary_operation(Instruction::Or, *x, &mut writer),
+            Mnemonic::Shr => emit_binary_operation(Instruction::LShift, *x, &mut writer),
+            Mnemonic::Shl => emit_binary_operation(Instruction::RShift, *x, &mut writer),
             Mnemonic::Ret => {
-                return_to_address.pop().unwrap();
-                let ip = return_to_address.last().unwrap();
-
-                decoder.set_ip(*ip);
-                writer.emit_instruction(Instruction::End);
-
-                // TODO: handle return
+                //TODO: read stack address
             }
             _ => {}
         }
     }
 
-    writer.finish()
+    Ok(writer.finish())
 }
