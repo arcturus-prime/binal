@@ -1,91 +1,169 @@
-use bytemuck::{Pod, bytes_of, bytes_of_mut};
+use std::fmt::Write;
+
 use num_enum::TryFromPrimitive;
 
-pub struct BitStack<'a> {
-    buffer: &'a mut [u8],
+pub struct BitStack {
+    buffer: [u8; 16],
     cursor: usize,
 }
 
-impl<'a> BitStack<'a> {
-    pub fn new(buffer: &'a mut [u8]) -> Self {
-        Self {
-            cursor: buffer.len() * 8,
-            buffer,
+pub trait BitStackOps {
+    const ZERO: Self;
+
+    fn write_bit(&mut self, index: usize, value: bool);
+    fn read_bit(&self, index: usize) -> bool;
+}
+
+macro_rules! define_bitstack_impl {
+    ($a:ty, $b:ty) => {
+        impl BitStackOps for $a {
+            const ZERO: $a = 0;
+
+            #[inline(always)]
+            fn write_bit(&mut self, index: usize, value: bool) {
+                let mut copy = <$b>::from_ne_bytes(self.to_ne_bytes());
+
+                copy &= !(1 << index);
+                copy |= (value as $b) << index;
+
+                *self = <$a>::from_ne_bytes(copy.to_ne_bytes())
+            }
+
+            #[inline(always)]
+            fn read_bit(&self, index: usize) -> bool {
+                let copy = <$b>::from_ne_bytes(self.to_ne_bytes());
+
+                (copy >> index) & 1 != 0
+            }
         }
+    };
+}
+
+macro_rules! define_bitstack_impl_float {
+    ($a:ty, $b:ty) => {
+        impl BitStackOps for $a {
+            const ZERO: $a = 0.0;
+
+            #[inline(always)]
+            fn write_bit(&mut self, index: usize, value: bool) {
+                let mut copy = <$b>::from_ne_bytes(self.to_ne_bytes());
+
+                copy &= !(1 << index);
+                copy |= (value as $b) << index;
+
+                *self = <$a>::from_ne_bytes(copy.to_ne_bytes())
+            }
+
+            #[inline(always)]
+            fn read_bit(&self, index: usize) -> bool {
+                let copy = <$b>::from_ne_bytes(self.to_ne_bytes());
+
+                (copy >> index) & 1 != 0
+            }
+        }
+    };
+}
+
+define_bitstack_impl_float!(f32, u32);
+define_bitstack_impl_float!(f64, u64);
+define_bitstack_impl!(u8, u8);
+define_bitstack_impl!(u16, u16);
+define_bitstack_impl!(u32, u32);
+define_bitstack_impl!(u64, u64);
+define_bitstack_impl!(u128, u128);
+define_bitstack_impl!(i8, u8);
+define_bitstack_impl!(i16, u16);
+define_bitstack_impl!(i32, u32);
+define_bitstack_impl!(i64, u64);
+define_bitstack_impl!(i128, u128);
+
+impl BitStack {
+    pub fn new() -> Self {
+        Self {
+            cursor: 0,
+            buffer: [0; 16],
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cursor == 0
+    }
+
+    pub fn all_zero(&self) -> bool {
+        if self.buffer[self.cursor / 8] >> (self.cursor % 8) != 0 {
+            return false;
+        }
+
+        for x in self.buffer[..self.cursor / 8].iter().rev() {
+            if *x != 0 {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    pub fn all_one(&self) -> bool {
+        if self.buffer[self.cursor / 8] >> (self.cursor % 8) != 0xFF >> (self.cursor % 8) {
+            return false;
+        }
+
+        for x in self.buffer[..self.cursor / 8].iter().rev() {
+            if *x != 0xFF {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     pub fn reset(&mut self) {
         self.cursor = 0;
     }
 
-    pub fn pop<const BITS: usize, T: Pod>(&mut self) -> T {
-        let mut result = T::zeroed();
-        let destination = bytes_of_mut(&mut result);
+    pub fn pop<const BITS: usize, T: BitStackOps>(&mut self) -> T {
+        let mut result = T::ZERO;
 
-        let mut bits = BITS;
-        for x in destination.iter_mut() {
-            let byte_read = self.cursor / 8;
-            let bit_read = self.cursor % 8;
+        for i in 0..BITS {
+            self.cursor -= 1;
 
-            if self.cursor < 8 {
-                *x = self.buffer[0] & (0xFF << (8 - self.cursor));
-                self.cursor = 0;
-                break;
-            }
+            let byte_index = self.cursor / 8;
+            let bit_index = self.cursor % 8;
 
-            if bits < 8 {
-                *x = self.buffer[byte_read] & (0xFF >> (8 - bits));
-                self.cursor -= bits;
-                break;
-            }
-
-            self.cursor -= 8;
-            bits -= 8;
-
-            if bit_read == 0 {
-                *x = self.buffer[byte_read];
-            } else {
-                *x = (self.buffer[byte_read] << bit_read)
-                    | (self.buffer[byte_read + 1] >> (8 - bit_read));
-            }
+            result.write_bit(BITS - i, self.buffer[byte_index].read_bit(bit_index));
         }
 
         result
     }
 
-    pub fn push<const BITS: usize, T: Pod>(&mut self, data: T) {
+    pub fn push<const BITS: usize, T: BitStackOps>(&mut self, data: T) {
         const {
             assert!(
-                BITS <= std::mem::size_of::<T>(),
+                BITS <= std::mem::size_of::<T>() * 8,
                 "BITS cannot be greater than the size of T"
             );
         }
 
-        let mut bits = BITS;
-        for x in bytes_of(&data) {
-            let byte_write = self.cursor / 8;
-            let bit_write = self.cursor % 8;
+        for i in 0..BITS {
+            let byte_index = self.cursor / 8;
+            let bit_index = self.cursor % 8;
 
-            if bits < 8 {
-                self.buffer[byte_write] &= self.cursor += bits;
-                break;
-            }
-
-            if bit_write == 0 {
-                self.buffer[byte_write] = *x;
-            } else {
-            }
-
-            bits -= 8;
-            self.cursor += 8;
+            self.buffer[byte_index].write_bit(bit_index, data.read_bit(i));
+            self.cursor += 1;
         }
     }
 }
 
 #[repr(u8)]
-#[derive(TryFromPrimitive, Copy, Clone)]
+#[derive(TryFromPrimitive, Copy, Clone, Debug)]
 pub enum Instruction {
     Nop = 128,
+
+    Const8,
+    Const16,
+    Const32,
+    Const64,
+    Const128,
 
     // Casts
     U64,       // value
@@ -173,18 +251,23 @@ impl Instruction {
             Instruction::Branch => 0,
             Instruction::BranchIndex => 1,
             Instruction::Return => 0,
-            Instruction::U64 => 0,
-            Instruction::U32 => 0,
-            Instruction::U16 => 0,
-            Instruction::U8 => 0,
-            Instruction::I64 => 0,
-            Instruction::I32 => 0,
-            Instruction::I16 => 0,
-            Instruction::I8 => 0,
-            Instruction::F32 => 0,
-            Instruction::F64 => 0,
-            Instruction::VectorF32 => 0,
-            Instruction::VectorF64 => 0,
+            Instruction::U64 => 1,
+            Instruction::U32 => 1,
+            Instruction::U16 => 1,
+            Instruction::U8 => 1,
+            Instruction::I64 => 1,
+            Instruction::I32 => 1,
+            Instruction::I16 => 1,
+            Instruction::I8 => 1,
+            Instruction::F32 => 1,
+            Instruction::F64 => 1,
+            Instruction::VectorF32 => 1,
+            Instruction::VectorF64 => 1,
+            Instruction::Const8 => 0,
+            Instruction::Const16 => 0,
+            Instruction::Const32 => 0,
+            Instruction::Const64 => 0,
+            Instruction::Const128 => 0,
         }
     }
 
@@ -233,6 +316,11 @@ impl Instruction {
             Instruction::F64 => 1,
             Instruction::VectorF32 => 1,
             Instruction::VectorF64 => 1,
+            Instruction::Const8 => 1,
+            Instruction::Const16 => 1,
+            Instruction::Const32 => 1,
+            Instruction::Const64 => 1,
+            Instruction::Const128 => 1,
         }
     }
 }
@@ -243,23 +331,14 @@ pub struct ProgramWriter {
 }
 
 impl ProgramWriter {
-    // NOTE: This function assumes we are working in little-endian
-    pub fn emit_constant<T: Pod>(&mut self, mut constant: T) {
-        let bytes = bytes_of_mut(&mut constant);
+    pub fn emit_constant<const BITS: usize, T: BitStackOps>(&mut self, constant: T) {
+        let mut stack = BitStack::new();
 
-        let mut end_byte = bytes.len();
-        for x in bytes.iter().rev() {
-            if *x != 0 {
-                break;
-            }
+        stack.push::<BITS, T>(constant);
 
-            end_byte -= 1;
-        }
-
-        let mut stack = BitStack::new(bytes);
-
-        for _ in 0..end_byte {
-            self.instructions.push(stack.pop::<7, u8>());
+        while !stack.is_empty() {
+            let byte = stack.pop::<7, u8>();
+            self.instructions.push(byte);
         }
     }
 
@@ -272,10 +351,11 @@ impl ProgramWriter {
     }
 }
 
+#[derive(Debug)]
 pub enum PrintError {
     InvalidByte,
     StackMismanaged,
-    TooLongConstant,
+    IOWriteError,
 }
 
 fn pop_safe(stack: &mut Vec<String>) -> Result<String, PrintError> {
@@ -285,15 +365,37 @@ fn pop_safe(stack: &mut Vec<String>) -> Result<String, PrintError> {
     }
 }
 
-pub fn print_instructions(code: &[u8]) -> Result<(), PrintError> {
-    let mut stack = vec![];
-    let mut stack = BitStack::new(&mut [0_u8; 64]);
-
-    stack.reset();
+pub fn print_instructions_simple(code: &[u8]) -> Result<String, PrintError> {
+    let mut output = String::new();
 
     for x in code {
         if *x < 128 {
-            stack.push::<7, u8>(*x);
+            if write!(output, "{:02x}", *x).is_err() {
+                return Err(PrintError::IOWriteError);
+            }
+
+            continue;
+        }
+
+        let Ok(x) = (*x).try_into() as Result<Instruction, _> else {
+            return Err(PrintError::InvalidByte);
+        };
+
+        if write!(output, "{:?} ", x).is_err() {
+            return Err(PrintError::IOWriteError);
+        };
+    }
+
+    Ok(output)
+}
+
+pub fn print_instructions(code: &[u8]) -> Result<(), PrintError> {
+    let mut stack = vec![];
+    let mut const_stack = BitStack::new();
+
+    for x in code {
+        if *x < 128 {
+            const_stack.push::<7, u8>(*x);
             continue;
         }
 
@@ -303,7 +405,6 @@ pub fn print_instructions(code: &[u8]) -> Result<(), PrintError> {
 
         let string = match x {
             Instruction::Nop => String::new(),
-            Instruction::Boolean => todo!(),
             Instruction::Add => todo!(),
             Instruction::Sub => todo!(),
             Instruction::Mul => todo!(),
@@ -333,14 +434,15 @@ pub fn print_instructions(code: &[u8]) -> Result<(), PrintError> {
             Instruction::Branch => todo!(),
             Instruction::BranchIndex => todo!(),
             Instruction::Return => todo!(),
-            Instruction::U64 => todo!(),
-            Instruction::U32 => todo!(),
-            Instruction::U16 => todo!(),
-            Instruction::U8 => todo!(),
-            Instruction::I64 => todo!(),
-            Instruction::I32 => todo!(),
-            Instruction::I16 => todo!(),
-            Instruction::I8 => todo!(),
+            Instruction::Boolean => todo!(),
+            Instruction::U64 => const_stack.pop::<64, u64>().to_string(),
+            Instruction::U32 => const_stack.pop::<32, u32>().to_string(),
+            Instruction::U16 => const_stack.pop::<16, u16>().to_string(),
+            Instruction::U8 => const_stack.pop::<8, u8>().to_string(),
+            Instruction::I64 => const_stack.pop::<64, i64>().to_string(),
+            Instruction::I32 => const_stack.pop::<32, i32>().to_string(),
+            Instruction::I16 => const_stack.pop::<16, i16>().to_string(),
+            Instruction::I8 => const_stack.pop::<8, i8>().to_string(),
             Instruction::F32 => todo!(),
             Instruction::F64 => todo!(),
             Instruction::VectorF32 => todo!(),

@@ -33,15 +33,15 @@ fn emit_memory_offset(inst: iced_x86::Instruction, code: &mut ProgramWriter) {
 }
 
 fn emit_register_read(register: Register, code: &mut ProgramWriter) {
-    code.emit_constant(register.size());
+    code.emit_constant(register.size() as u8);
     code.emit_instruction(Instruction::U8);
-    code.emit_constant(register.full_register() as u64);
+    code.emit_constant(register.full_register() as u8);
     code.emit_instruction(Instruction::U64);
     code.emit_instruction(Instruction::Load)
 }
 
 fn emit_register_write(register: Register, code: &mut ProgramWriter) {
-    code.emit_constant(register.full_register() as u64);
+    code.emit_constant(register.full_register() as u8);
     code.emit_instruction(Instruction::U64);
     code.emit_instruction(Instruction::Store);
 }
@@ -77,7 +77,7 @@ fn emit_operand_read(
         OpKind::MemoryESEDI => todo!(),
         OpKind::MemoryESRDI => todo!(),
         OpKind::Memory => {
-            code.emit_constant(instruction.memory_size() as usize);
+            code.emit_constant(instruction.memory_size() as u32);
             code.emit_instruction(Instruction::U8);
             emit_memory_offset(instruction, code);
             code.emit_instruction(Instruction::Load)
@@ -134,14 +134,14 @@ fn emit_binary_operation(
 }
 
 fn emit_flag_condition(flags: u32, writer: &mut ProgramWriter) {
-    writer.emit_constant(4);
+    writer.emit_constant::<7, u8>(4);
     writer.emit_instruction(Instruction::U8);
-    writer.emit_constant(512 * 512);
+    writer.emit_constant::<14, u16>(512 * 512);
     writer.emit_instruction(Instruction::U64);
     writer.emit_instruction(Instruction::Load);
-    writer.emit_constant(flags);
+    writer.emit_constant::<32, u32>(flags);
     writer.emit_instruction(Instruction::Or);
-    writer.emit_constant(flags);
+    writer.emit_constant::<32, u32>(flags);
     writer.emit_instruction(Instruction::Eq);
 }
 

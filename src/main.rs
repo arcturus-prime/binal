@@ -1,6 +1,9 @@
 use std::{fs::File, io::Read};
 
-use crate::x86::{lift_block, lift_control_flow};
+use crate::{
+    ir::print_instructions_simple,
+    x86::{lift_block, lift_control_flow},
+};
 
 mod external;
 mod ir;
@@ -21,7 +24,12 @@ fn main() {
     match out_code {
         Ok(o) => {
             for x in o {
-                println!("{:x?}", lift_block(&x.1.code));
+                let Ok(b) = lift_block(&x.1.code) else {
+                    println!("Lifting failed");
+                    continue;
+                };
+
+                println!("{}", print_instructions_simple(&b).unwrap());
             }
         }
         Err(e) => println!("{:x?}", e),
