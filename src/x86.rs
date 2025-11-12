@@ -1,9 +1,11 @@
-use std::collections::{HashMap, VecDeque};
+use std::{
+    collections::{HashMap, VecDeque},
+};
 
-use crate::ir::{Instruction, ProgramWriter};
+use crate::ir::{Instruction, FunctionWriter};
 use iced_x86::{Decoder, DecoderOptions, Mnemonic, OpKind, Register, RflagsBits};
 
-fn emit_memory_offset(inst: iced_x86::Instruction, code: &mut ProgramWriter) {
+fn emit_memory_offset(inst: iced_x86::Instruction, code: &mut FunctionWriter) {
     let mut to_add = 0;
 
     if inst.memory_base() != Register::None {
@@ -32,7 +34,7 @@ fn emit_memory_offset(inst: iced_x86::Instruction, code: &mut ProgramWriter) {
     }
 }
 
-fn emit_register_read(register: Register, code: &mut ProgramWriter) {
+fn emit_register_read(register: Register, code: &mut FunctionWriter) {
     code.emit_constant(register.size() as u8);
     code.emit_instruction(Instruction::U8);
     code.emit_constant(register.full_register() as u8);
@@ -40,7 +42,7 @@ fn emit_register_read(register: Register, code: &mut ProgramWriter) {
     code.emit_instruction(Instruction::Load)
 }
 
-fn emit_register_write(register: Register, code: &mut ProgramWriter) {
+fn emit_register_write(register: Register, code: &mut FunctionWriter) {
     code.emit_constant(register.full_register() as u8);
     code.emit_instruction(Instruction::U64);
     code.emit_instruction(Instruction::Store);
@@ -49,7 +51,7 @@ fn emit_register_write(register: Register, code: &mut ProgramWriter) {
 fn emit_operand_read(
     instruction: iced_x86::Instruction,
     operand_number: u32,
-    code: &mut ProgramWriter,
+    code: &mut FunctionWriter,
 ) {
     match instruction.op_kind(operand_number) {
         OpKind::Register => emit_register_read(instruction.op_register(operand_number), code),
@@ -88,7 +90,7 @@ fn emit_operand_read(
 fn emit_operand_write(
     instruction: iced_x86::Instruction,
     operand_number: u32,
-    code: &mut ProgramWriter,
+    code: &mut FunctionWriter,
 ) {
     match instruction.op_kind(operand_number) {
         OpKind::Register => emit_register_write(instruction.op_register(operand_number), code),
@@ -125,7 +127,7 @@ fn emit_operand_write(
 fn emit_binary_operation(
     operation: Instruction,
     instruction: iced_x86::Instruction,
-    writer: &mut ProgramWriter,
+    writer: &mut FunctionWriter,
 ) {
     emit_operand_read(instruction, 0, writer);
     emit_operand_read(instruction, 1, writer);
@@ -133,10 +135,10 @@ fn emit_binary_operation(
     emit_operand_write(instruction, 0, writer);
 }
 
-fn emit_flag_condition(flags: u32, writer: &mut ProgramWriter) {
+fn emit_flag_condition(flags: u32, writer: &mut FunctionWriter) {
     writer.emit_constant(4);
     writer.emit_instruction(Instruction::U8);
-    writer.emit_constant(512 * 512);
+    writer.emit_constant(512 * 512); // address of choice
     writer.emit_instruction(Instruction::U64);
     writer.emit_instruction(Instruction::Load);
     writer.emit_constant(flags);
@@ -160,17 +162,28 @@ pub enum X86LiftError {
     DecodeOutOfBounds(u64),
 }
 
-fn resolve_jump_target(instruction: iced_x86::Instruction) -> Option<(u64, bool, bool)> {
+fn resolve_jump_target(
+    instruction: iced_x86::Instruction,
+    length: u64,
+) -> Option<(u64, bool, bool)> {
     if instruction.is_call_near_indirect() {
         // TODO: attempt to resolve
         Some((0, true, false))
     } else if instruction.is_jmp_near_indirect() {
         // TODO: attempt to resolve
         Some((0, false, false))
-    } else if instruction.is_jcc_short_or_near() || instruction.is_call_near() {
+    } else if (instruction.is_jcc_short_or_near() || instruction.is_call_near())
+        && instruction.near_branch_target() < length
+    {
         Some((instruction.near_branch_target(), true, true))
-    } else if instruction.is_jmp_short_or_near() {
+    } else if (instruction.is_jcc_short_or_near() || instruction.is_call_near())
+        && instruction.near_branch_target() >= length
+    {
+        Some((0, true, false))
+    } else if instruction.is_jmp_short_or_near() && instruction.near_branch_target() < length {
         Some((instruction.near_branch_target(), false, true))
+    } else if instruction.is_jmp_short_or_near() && instruction.near_branch_target() >= length {
+        Some((0, false, false))
     } else if instruction.mnemonic() == Mnemonic::Ret || instruction.mnemonic() == Mnemonic::Int3 {
         Some((0, false, false))
     } else {
@@ -178,16 +191,10 @@ fn resolve_jump_target(instruction: iced_x86::Instruction) -> Option<(u64, bool,
     }
 }
 
-#[derive(Debug)]
-pub struct UnliftedBlock {
-    pub code: Vec<iced_x86::Instruction>,
-    pub targets: Vec<u64>,
-}
-
 pub fn lift_control_flow(
     code: &[u8],
     position: u64,
-) -> Result<HashMap<u64, UnliftedBlock>, X86LiftError> {
+) -> Result<Vec<Vec<iced_x86::Instruction>>, X86LiftError> {
     let mut queue = VecDeque::new();
     let mut decoder = Decoder::new(64, code, DecoderOptions::NONE);
 
@@ -207,29 +214,22 @@ pub fn lift_control_flow(
         }
 
         let instruction = decoder.decode();
-        let jump_target = resolve_jump_target(instruction);
+        let jump_target = resolve_jump_target(instruction, code.len() as u64);
 
         block.push(instruction);
 
         if let Some((target, should_return, should_use_target)) = jump_target {
-            let mut targets = vec![];
-
             if should_return {
                 queue.push_back(decoder.ip());
-                targets.push(decoder.ip())
             }
 
             if should_use_target {
                 queue.push_back(target);
-                targets.push(target);
             }
 
             blocks.insert(
                 block_start,
-                UnliftedBlock {
-                    code: std::mem::take(&mut block),
-                    targets,
-                },
+                std::mem::take(&mut block),
             );
         }
     }
@@ -238,7 +238,7 @@ pub fn lift_control_flow(
 }
 
 pub fn lift_block(block: &[iced_x86::Instruction]) -> Result<Vec<u8>, X86LiftError> {
-    let mut writer = ProgramWriter::default();
+    let mut writer = FunctionWriter::default();
 
     for x in block {
         match x.mnemonic() {

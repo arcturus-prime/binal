@@ -1,34 +1,42 @@
-use std::{fmt::{Debug, Write}, ops::BitAnd};
+use std::fmt::{Debug, Write};
 
 use num_enum::TryFromPrimitive;
 use num_traits::PrimInt;
 
-#[derive(Default)]
-pub struct ProgramWriter {
-    code: Vec<u8>,
+pub struct Executable {
+    functions: Vec<Vec<u8>>,
 }
 
-impl ProgramWriter {
-    pub fn emit_instruction(&mut self, instruction: Instruction) {}
-    pub fn emit_constant<T: PrimInt + TryFrom<u8> + TryInto<u8>>(&mut self, mut number: T)
-    {
+pub struct FunctionWriter<'a>(&'a mut Vec<u8>);
+
+impl<'a> FunctionWriter<'a> {
+    pub fn new(function: &'a mut Vec<u8>) -> Self {
+        Self(function)
+    }
+
+    pub fn emit_instruction(&mut self, instruction: Instruction) {
+        self.0.push(instruction as u8);
+    }
+
+    pub fn emit_constant<T: PrimInt + TryFrom<u8> + TryInto<u8>>(&mut self, mut number: T) {
         loop {
             // SAFETY: number & 0x7f is always valid as u8 due to the bitmask
-            let v: u8 = unsafe { (number & 0x7f.try_into().unwrap_unchecked()).try_into().unwrap_unchecked() };
+            let v: u8 = unsafe {
+                (number & 0x7f.try_into().unwrap_unchecked())
+                    .try_into()
+                    .unwrap_unchecked()
+            };
             number = number >> 7;
 
-            self.code.push(v);
+            self.0.push(v);
 
-            if (number == T::zero() && v & 0x40 == 0) || (number == T::max_value() && v & 0x40 != 0) {
+            if (number == T::zero() && v & 0x40 == 0) || (number == T::max_value() && v & 0x40 != 0)
+            {
                 break;
             }
         }
     }
-
-    pub fn finish(self) -> Vec<u8> {
-        self.code
-    }
-} 
+}
 
 #[repr(u8)]
 #[derive(TryFromPrimitive, Copy, Clone, Debug, PartialEq)]
@@ -70,23 +78,25 @@ pub enum Instruction {
     Gt,     // left, right
     Gte,    // left, right
 
-    Load,  // offset, size
-    Store, // offset, value
-
-    // Macros
     Copy, // value
     Pick, // number
 
-    Call, // destination
+    Call, // destination-func
+    Jump, // destination-func
+    Return,
+
+    Break,
+    BreakIndex, // index
+    Continue,
+    ContinueIndex, // index
 
     Loop,
     If, // condition
     Else,
     End,
 
-    Branch,
-    BranchIndex, // number
-    Return,
+    Load,  // offset, size
+    Store, // offset, value
 }
 
 impl Instruction {
@@ -121,9 +131,6 @@ impl Instruction {
             Instruction::Loop => 0,
             Instruction::If => 1,
             Instruction::Else => 0,
-            Instruction::Branch => 0,
-            Instruction::BranchIndex => 1,
-            Instruction::Return => 0,
             Instruction::U64 => 1,
             Instruction::U32 => 1,
             Instruction::U16 => 1,
@@ -136,6 +143,12 @@ impl Instruction {
             Instruction::F64 => 1,
             Instruction::VectorF32 => 1,
             Instruction::VectorF64 => 1,
+            Instruction::Jump => 1,
+            Instruction::Break => 0,
+            Instruction::BreakIndex => 1,
+            Instruction::Continue => 0,
+            Instruction::ContinueIndex => 1,
+            Instruction::Return => 0,
         }
     }
 
@@ -170,9 +183,6 @@ impl Instruction {
             Instruction::Loop => 0,
             Instruction::If => 0,
             Instruction::Else => 0,
-            Instruction::Branch => 0,
-            Instruction::BranchIndex => 0,
-            Instruction::Return => 0,
             Instruction::U64 => 1,
             Instruction::U32 => 1,
             Instruction::U16 => 1,
@@ -185,6 +195,12 @@ impl Instruction {
             Instruction::F64 => 1,
             Instruction::VectorF32 => 1,
             Instruction::VectorF64 => 1,
+            Instruction::Jump => 0,
+            Instruction::Break => 0,
+            Instruction::BreakIndex => 0,
+            Instruction::Continue => 0,
+            Instruction::ContinueIndex => 0,
+            Instruction::Return => 0
         }
     }
 }
@@ -196,7 +212,7 @@ pub enum PrintError {
     IOWriteError,
 }
 
-pub fn print_instructions_simple(code: &[u8]) -> Result<String, PrintError> {
+pub fn print_function_simple(code: &[u8]) -> Result<String, PrintError> {
     let mut output = String::new();
 
     for x in code {
@@ -232,7 +248,7 @@ where
     <T as TryFrom<u8>>::Error: Debug,
 {
     let mut result = T::zero();
-    let mut last= 0;
+    let mut last = 0;
     let mut shift = 0;
 
     for v in data {
@@ -251,7 +267,7 @@ where
     result
 }
 
-pub fn print_instructions(code: &[u8]) -> Result<(), PrintError> {
+pub fn print_function(code: &[u8]) -> Result<String, PrintError> {
     let mut stack = vec![];
     let mut const_stack = vec![];
 
@@ -294,9 +310,6 @@ pub fn print_instructions(code: &[u8]) -> Result<(), PrintError> {
             Instruction::Loop => todo!(),
             Instruction::If => todo!(),
             Instruction::Else => todo!(),
-            Instruction::Branch => todo!(),
-            Instruction::BranchIndex => todo!(),
-            Instruction::Return => todo!(),
             Instruction::Boolean => todo!(),
             Instruction::U64 => parse_varint::<u64>(&const_stack).to_string(),
             Instruction::U32 => parse_varint::<u32>(&const_stack).to_string(),
@@ -310,6 +323,12 @@ pub fn print_instructions(code: &[u8]) -> Result<(), PrintError> {
             Instruction::F64 => todo!(),
             Instruction::VectorF32 => todo!(),
             Instruction::VectorF64 => todo!(),
+            Instruction::Jump => todo!(),
+            Instruction::Break => todo!(),
+            Instruction::BreakIndex => todo!(),
+            Instruction::Continue => todo!(),
+            Instruction::ContinueIndex => todo!(),
+            Instruction::Return => todo!()
         };
 
         if x == Instruction::U64
@@ -327,5 +346,5 @@ pub fn print_instructions(code: &[u8]) -> Result<(), PrintError> {
         stack.push(string);
     }
 
-    Ok(())
+    Ok(stack.pop().unwrap())
 }

@@ -1,11 +1,12 @@
 use crate::{
-    ir::print_instructions_simple,
+    ir::print_function_simple,
     x86::{lift_block, lift_control_flow},
 };
 
 mod external;
 mod ir;
 mod x86;
+mod lifter;
 
 fn main() {
     let code = [
@@ -49,7 +50,7 @@ fn main() {
                     continue;
                 };
 
-                println!("{:?}", print_instructions_simple(&b).unwrap());
+                println!("{:?}", print_function_simple(&b).unwrap());
             }
         }
         Err(e) => println!("{:x?}", e),
