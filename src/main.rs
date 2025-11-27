@@ -1,12 +1,9 @@
-use crate::{
-    ir::print_function_simple,
-    x86::{lift_block, lift_control_flow},
-};
+use crate::x86::{lift_block, lift_control_flow};
 
 mod external;
 mod ir;
-mod x86;
 mod lifter;
+mod x86;
 
 fn main() {
     let code = [
@@ -39,20 +36,4 @@ fn main() {
         0xcb, 0x04, 0x40, 0x89, 0x1d, 0xbd, 0xdd, 0xcb, 0x04, 0x48, 0x8b, 0x5c, 0x24, 0x28, 0x33,
         0xc0, 0x48, 0x8b, 0x74, 0x24, 0x30, 0x48, 0x83, 0xc4, 0x10, 0x5f, 0xc3, 0xcc, 0xcc, 0xcc,
     ];
-
-    let out_code = lift_control_flow(&code, 0);
-
-    match out_code {
-        Ok(o) => {
-            for x in o {
-                let Ok(b) = lift_block(&x.1.code) else {
-                    println!("Lifting failed");
-                    continue;
-                };
-
-                println!("{:?}", print_function_simple(&b).unwrap());
-            }
-        }
-        Err(e) => println!("{:x?}", e),
-    }
 }

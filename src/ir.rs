@@ -1,47 +1,164 @@
-use std::fmt::{Debug, Write};
+use std::{fmt::Debug, io::Cursor};
 
 use num_enum::TryFromPrimitive;
-use num_traits::PrimInt;
 
-pub struct Executable {
-    functions: Vec<Vec<u8>>,
+enum IrIOError {
+    InvalidByte,
+    OutOfBounds,
+    Leb128Error,
 }
 
-pub struct FunctionWriter<'a>(&'a mut Vec<u8>);
+pub struct InstructionStream {
+    buffer: Vec<u8>,
+    gap_start: usize,
+    gap_end: usize,
+}
 
-impl<'a> FunctionWriter<'a> {
-    pub fn new(function: &'a mut Vec<u8>) -> Self {
-        Self(function)
+impl InstructionStream {
+    pub fn new() -> Self {
+        Self::with_capacity(64)
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            buffer: vec![0; capacity],
+            gap_start: 0,
+            gap_end: capacity,
+        }
+    }
+
+    pub fn seek(&mut self, pos: usize) {
+        let len = self.len();
+        if pos > len {
+            panic!("seek position {} out of bounds (length: {})", pos, len);
+        }
+
+        if pos < self.gap_start {
+            let distance = self.gap_start - pos;
+            let new_gap_end = self.gap_end;
+            let new_gap_start = pos;
+
+            for i in 0..distance {
+                self.buffer[new_gap_end - distance + i] = self.buffer[pos + i];
+            }
+
+            self.gap_start = new_gap_start;
+            self.gap_end = new_gap_end;
+        } else if pos > self.gap_start {
+            let distance = pos - self.gap_start;
+            let old_gap_end = self.gap_end;
+
+            for i in 0..distance {
+                self.buffer[self.gap_start + i] = self.buffer[old_gap_end + i];
+            }
+
+            self.gap_start = pos;
+            self.gap_end = old_gap_end + distance;
+        }
+    }
+
+    fn ensure_gap(&mut self, needed: usize) {
+        let gap_size = self.gap_end - self.gap_start;
+        if gap_size < needed {
+            let new_gap_size = (needed + 64).max(self.buffer.len());
+            let old_len = self.buffer.len();
+
+            self.buffer.resize(old_len + new_gap_size, 0);
+
+            let after_gap_len = old_len - self.gap_end;
+
+            if after_gap_len > 0 {
+                let src_start = self.gap_end;
+                let dst_start = self.buffer.len() - after_gap_len;
+                for i in (0..after_gap_len).rev() {
+                    self.buffer[dst_start + i] = self.buffer[src_start + i];
+                }
+            }
+
+            self.gap_end = self.buffer.len() - after_gap_len;
+        }
     }
 
     pub fn emit_instruction(&mut self, instruction: Instruction) {
-        self.0.push(instruction as u8);
+        self.ensure_gap(1);
+        self.buffer[self.gap_start] = instruction as u8;
+        self.gap_start += 1;
     }
 
-    pub fn emit_constant<T: PrimInt + TryFrom<u8> + TryInto<u8>>(&mut self, mut number: T) {
-        loop {
-            // SAFETY: number & 0x7f is always valid as u8 due to the bitmask
-            let v: u8 = unsafe {
-                (number & 0x7f.try_into().unwrap_unchecked())
-                    .try_into()
-                    .unwrap_unchecked()
-            };
-            number = number >> 7;
+    pub fn emit_constant(&mut self, number: i64) -> Result<(), IrIOError> {
+        // Reserve space for instruction + max LEB128 size (10 bytes for i64)
+        self.ensure_gap(11);
 
-            self.0.push(v);
+        self.buffer[self.gap_start] = Instruction::Constant as u8;
+        self.gap_start += 1;
 
-            if (number == T::zero() && v & 0x40 == 0) || (number == T::max_value() && v & 0x40 != 0)
-            {
-                break;
-            }
+        let mut buf = &mut self.buffer[self.gap_start..self.gap_end];
+        let Ok(bytes_written) = leb128::write::signed(&mut buf, number) else {
+            return Err(IrIOError::Leb128Error);
+        };
+
+        self.gap_start += bytes_written;
+
+        Ok(())
+    }
+
+    fn read_byte(&mut self) -> Option<u8> {
+        if self.gap_start >= self.len() {
+            return None;
         }
+
+        let byte = self.buffer[self.gap_end];
+        self.gap_end += 1;
+
+        Some(byte)
+    }
+
+    pub fn consume_instruction(&mut self) -> Result<Instruction, IrIOError> {
+        Instruction::try_from(self.read_byte().ok_or(IrIOError::OutOfBounds)?)
+            .ok()
+            .ok_or(IrIOError::InvalidByte)
+    }
+
+    pub fn consume_constant(&mut self) -> Result<i64, IrIOError> {
+        let mut cursor = Cursor::new(&self.buffer[self.gap_end..]);
+        let Ok(value) = leb128::read::signed(&mut cursor) else {
+            return Err(IrIOError::Leb128Error);
+        };
+
+        self.gap_end += cursor.position() as usize;
+
+        Ok(value)
+    }
+
+    pub fn position(&self) -> usize {
+        self.gap_start
+    }
+
+    pub fn len(&self) -> usize {
+        self.buffer.len() - (self.gap_end - self.gap_start)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn to_vec(&self) -> Vec<u8> {
+        let mut result = Vec::with_capacity(self.len());
+        result.extend_from_slice(&self.buffer[..self.gap_start]);
+        result.extend_from_slice(&self.buffer[self.gap_end..]);
+        result
+    }
+
+    pub fn clear(&mut self) {
+        self.gap_start = 0;
+        self.gap_end = self.buffer.len();
     }
 }
 
 #[repr(u8)]
 #[derive(TryFromPrimitive, Copy, Clone, Debug, PartialEq)]
 pub enum Instruction {
-    Nop = 128,
+    Constant,
 
     // Casts
     U64,       // value
@@ -54,7 +171,6 @@ pub enum Instruction {
     I8,        // value
     F32,       // value
     F64,       // value
-    Boolean,   // value
     VectorF32, // value
     VectorF64, // value
 
@@ -81,9 +197,8 @@ pub enum Instruction {
     Copy, // value
     Pick, // number
 
-    Call, // destination-func
-    Jump, // destination-func
-    Return,
+    Recall,
+    Jump, // address
 
     Break,
     BreakIndex, // index
@@ -97,254 +212,4 @@ pub enum Instruction {
 
     Load,  // offset, size
     Store, // offset, value
-}
-
-impl Instruction {
-    pub fn argument_count(self) -> usize {
-        match self {
-            Instruction::Call => 1,
-            Instruction::Nop => 0,
-            Instruction::Boolean => 1,
-            Instruction::Add => 2,
-            Instruction::Sub => 2,
-            Instruction::Mul => 2,
-            Instruction::Div => 2,
-            Instruction::Mod => 2,
-            Instruction::Neg => 1,
-            Instruction::And => 2,
-            Instruction::Or => 2,
-            Instruction::Xor => 2,
-            Instruction::Not => 1,
-            Instruction::LShift => 2,
-            Instruction::RShift => 2,
-            Instruction::Eq => 2,
-            Instruction::Neq => 2,
-            Instruction::Lt => 2,
-            Instruction::Lte => 2,
-            Instruction::Gt => 2,
-            Instruction::Gte => 2,
-            Instruction::Copy => 1,
-            Instruction::Pick => 1,
-            Instruction::End => 0,
-            Instruction::Load => 2,
-            Instruction::Store => 2,
-            Instruction::Loop => 0,
-            Instruction::If => 1,
-            Instruction::Else => 0,
-            Instruction::U64 => 1,
-            Instruction::U32 => 1,
-            Instruction::U16 => 1,
-            Instruction::U8 => 1,
-            Instruction::I64 => 1,
-            Instruction::I32 => 1,
-            Instruction::I16 => 1,
-            Instruction::I8 => 1,
-            Instruction::F32 => 1,
-            Instruction::F64 => 1,
-            Instruction::VectorF32 => 1,
-            Instruction::VectorF64 => 1,
-            Instruction::Jump => 1,
-            Instruction::Break => 0,
-            Instruction::BreakIndex => 1,
-            Instruction::Continue => 0,
-            Instruction::ContinueIndex => 1,
-            Instruction::Return => 0,
-        }
-    }
-
-    pub fn product_count(self) -> usize {
-        match self {
-            Instruction::Call => 0,
-            Instruction::Nop => 0,
-            Instruction::Boolean => 1,
-            Instruction::Add => 1,
-            Instruction::Sub => 1,
-            Instruction::Mul => 1,
-            Instruction::Div => 1,
-            Instruction::Mod => 1,
-            Instruction::Neg => 1,
-            Instruction::And => 1,
-            Instruction::Or => 1,
-            Instruction::Xor => 1,
-            Instruction::Not => 1,
-            Instruction::LShift => 1,
-            Instruction::RShift => 1,
-            Instruction::Eq => 1,
-            Instruction::Neq => 1,
-            Instruction::Lt => 1,
-            Instruction::Lte => 1,
-            Instruction::Gt => 1,
-            Instruction::Gte => 1,
-            Instruction::Copy => 2,
-            Instruction::Pick => 1,
-            Instruction::End => 0,
-            Instruction::Load => 1,
-            Instruction::Store => 0,
-            Instruction::Loop => 0,
-            Instruction::If => 0,
-            Instruction::Else => 0,
-            Instruction::U64 => 1,
-            Instruction::U32 => 1,
-            Instruction::U16 => 1,
-            Instruction::U8 => 1,
-            Instruction::I64 => 1,
-            Instruction::I32 => 1,
-            Instruction::I16 => 1,
-            Instruction::I8 => 1,
-            Instruction::F32 => 1,
-            Instruction::F64 => 1,
-            Instruction::VectorF32 => 1,
-            Instruction::VectorF64 => 1,
-            Instruction::Jump => 0,
-            Instruction::Break => 0,
-            Instruction::BreakIndex => 0,
-            Instruction::Continue => 0,
-            Instruction::ContinueIndex => 0,
-            Instruction::Return => 0
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum PrintError {
-    InvalidByte,
-    StackMismanaged,
-    IOWriteError,
-}
-
-pub fn print_function_simple(code: &[u8]) -> Result<String, PrintError> {
-    let mut output = String::new();
-
-    for x in code {
-        if *x < 128 {
-            if write!(output, "{:02x}", *x).is_err() {
-                return Err(PrintError::IOWriteError);
-            }
-
-            continue;
-        }
-
-        let Ok(x) = (*x).try_into() as Result<Instruction, _> else {
-            return Err(PrintError::InvalidByte);
-        };
-
-        if write!(output, "{:?} ", x).is_err() {
-            return Err(PrintError::IOWriteError);
-        };
-    }
-
-    Ok(output)
-}
-
-fn pop_safe(stack: &mut Vec<String>) -> Result<String, PrintError> {
-    match stack.pop() {
-        None => Err(PrintError::StackMismanaged),
-        Some(x) => Ok(x),
-    }
-}
-
-fn parse_varint<T: PrimInt + TryFrom<u8>>(data: &[u8]) -> T
-where
-    <T as TryFrom<u8>>::Error: Debug,
-{
-    let mut result = T::zero();
-    let mut last = 0;
-    let mut shift = 0;
-
-    for v in data {
-        let converted: T = (*v).try_into().unwrap();
-
-        result = result | (converted << shift);
-        shift += 7;
-
-        last = *v;
-    }
-
-    if data.len() < size_of::<T>() || last & 0x40 != 0 {
-        result = result | (T::max_value() << shift);
-    }
-
-    result
-}
-
-pub fn print_function(code: &[u8]) -> Result<String, PrintError> {
-    let mut stack = vec![];
-    let mut const_stack = vec![];
-
-    for x in code {
-        if *x < 128 {
-            const_stack.push(*x);
-            continue;
-        }
-
-        let Ok(x) = (*x).try_into() else {
-            return Err(PrintError::InvalidByte);
-        };
-
-        let string = match x {
-            Instruction::Call => todo!(),
-            Instruction::Nop => String::new(),
-            Instruction::Add => todo!(),
-            Instruction::Sub => todo!(),
-            Instruction::Mul => todo!(),
-            Instruction::Div => todo!(),
-            Instruction::Mod => todo!(),
-            Instruction::Neg => todo!(),
-            Instruction::And => todo!(),
-            Instruction::Or => todo!(),
-            Instruction::Xor => todo!(),
-            Instruction::Not => todo!(),
-            Instruction::LShift => todo!(),
-            Instruction::RShift => todo!(),
-            Instruction::Eq => todo!(),
-            Instruction::Neq => todo!(),
-            Instruction::Lt => todo!(),
-            Instruction::Lte => todo!(),
-            Instruction::Gt => todo!(),
-            Instruction::Gte => todo!(),
-            Instruction::Copy => todo!(),
-            Instruction::Pick => todo!(),
-            Instruction::End => todo!(),
-            Instruction::Load => todo!(),
-            Instruction::Store => todo!(),
-            Instruction::Loop => todo!(),
-            Instruction::If => todo!(),
-            Instruction::Else => todo!(),
-            Instruction::Boolean => todo!(),
-            Instruction::U64 => parse_varint::<u64>(&const_stack).to_string(),
-            Instruction::U32 => parse_varint::<u32>(&const_stack).to_string(),
-            Instruction::U16 => parse_varint::<u16>(&const_stack).to_string(),
-            Instruction::U8 => parse_varint::<u8>(&const_stack).to_string(),
-            Instruction::I64 => parse_varint::<i64>(&const_stack).to_string(),
-            Instruction::I32 => parse_varint::<i32>(&const_stack).to_string(),
-            Instruction::I16 => parse_varint::<i16>(&const_stack).to_string(),
-            Instruction::I8 => parse_varint::<i8>(&const_stack).to_string(),
-            Instruction::F32 => todo!(),
-            Instruction::F64 => todo!(),
-            Instruction::VectorF32 => todo!(),
-            Instruction::VectorF64 => todo!(),
-            Instruction::Jump => todo!(),
-            Instruction::Break => todo!(),
-            Instruction::BreakIndex => todo!(),
-            Instruction::Continue => todo!(),
-            Instruction::ContinueIndex => todo!(),
-            Instruction::Return => todo!()
-        };
-
-        if x == Instruction::U64
-            || x == Instruction::U32
-            || x == Instruction::U16
-            || x == Instruction::U8
-            || x == Instruction::I64
-            || x == Instruction::I32
-            || x == Instruction::I16
-            || x == Instruction::I8
-        {
-            const_stack.clear()
-        }
-
-        stack.push(string);
-    }
-
-    Ok(stack.pop().unwrap())
 }
