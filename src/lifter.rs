@@ -121,7 +121,6 @@ fn cast_literal(value: Literal, target_type: Instruction) -> Result<Literal, Lif
 
 enum LifterData {
     Literal(Literal),
-    Expression(Vec<LifterData>),
 }
 
 enum LifterControl {
@@ -137,8 +136,11 @@ fn pop_data_safe(stack: &mut Vec<LifterData>) -> Result<LifterData, LifterError>
 
 pub fn lift<T: SemanticGenerator>(generator: &T, mut address: u64) -> Result<Vec<u8>, LifterError> {
     let mut code_out = InstructionStream::new();
+    let mut current_block = InstructionStream::new();
+
     let mut code_in = InstructionStream::new();
     let mut data_stack = Vec::new();
+    let mut control_stack = Vec::new();
 
     loop {
         if let Err(e) = generator.disassemble(address, &mut code_in) {

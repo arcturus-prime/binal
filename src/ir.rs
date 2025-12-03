@@ -79,6 +79,12 @@ impl InstructionStream {
         }
     }
 
+    pub fn emit_block(&mut self, block: InstructionStream) {
+        self.ensure_gap(block.len());
+        self.buffer[self.gap_start..self.gap_start + block.len()].copy_from_slice(&block.to_vec());
+        self.gap_start += block.len();
+    }
+
     pub fn emit_instruction(&mut self, instruction: Instruction) {
         self.ensure_gap(1);
         self.buffer[self.gap_start] = instruction as u8;
